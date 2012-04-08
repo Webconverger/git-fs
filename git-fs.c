@@ -1,3 +1,7 @@
+/*
+ * fuse + libgit2 = read-only mounting of bare repos
+ */
+
 #include <fuse.h>
 #include <stdio.h>
 #include <string.h>
@@ -57,7 +61,6 @@ int git_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 {
 	(void) offset;
 	(void) fi;
-	const git_tree_entry *e;
 	int i,ecount = 0;
 
 	fprintf(stderr, "git_readdir for %s\n", path);
@@ -83,8 +86,6 @@ int git_read(const char *path, char *buf, size_t size, off_t offset,
 	git_index_entry *e;
 	git_odb_object *obj;
 	git_oid oid;
-	unsigned char *data;
-	int len;
 
 	fprintf(stderr,"git_read for -> %s with offset %d size %d\n", path, (int)offset, (int)size );
 
@@ -119,15 +120,16 @@ struct fuse_operations git_oper = {
 
 int main(int argc, char *argv[])
 {
-	char *o,*r,*m;
+	char *r,*m;
 	char *a[]= { argv[0],argv[1],argv[2] };
-	git_oid g_oid;
+	//git_oid g_oid;
+	//char *o;
 
-	m = argv[2];
+	r = argv[2];
 	//o = argv[2+1];
-	r = argv[2+1];
+	m = argv[2+1];
 	//printf("using repo %s, mnt %s, oid %s\n",r, m, o);
-	printf("using repo %s, mnt %s, \n",r, m);
+	printf("mounting repo %s on %s\n",r, m);
 
 	if (git_repository_open(&g_repo, r) < 0)
 		return perror("repo"), 1;
