@@ -175,12 +175,21 @@ ending:
 	return size;
 }
 
+int git_readlink(const char *path, char *buf, size_t size) {
+	struct fuse_file_info fi;
+
+	if ( git_read(path, buf, size, 0, &fi) > 0 )
+		return 0;
+	return -ENOENT;
+}
+
 struct fuse_operations git_oper = {
 	.getattr= git_getattr,
 	.readdir= git_readdir,
 	.open= git_open,
 	.read= git_read,
-	.readdir= git_readdir
+	.readdir= git_readdir,
+	.readlink= git_readlink
 };
 
 int main(int argc, char *argv[])
