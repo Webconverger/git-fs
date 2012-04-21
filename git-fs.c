@@ -112,7 +112,7 @@ int git_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	for (i = 0; i < ecount; ++i) {
 		git_index_entry *e = git_index_get(g_index, i);
 		strncpy(file, e->path, strlen(e->path)+1);
-		debug( "  readdir for '%s' got '%s'\n",path, file);
+		debug( "  readdir for '%s' got '%s' from epath '%s'\n",path, file, e->path);
 		if (strncmp(path, file, strlen(path)) != 0 && strlen(path) != 0) {
 			debug( "  readdir path '%s' not init substring of '%s'\n",path, file);
 			continue;
@@ -127,8 +127,9 @@ int git_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			continue;
 		}
 		if (strncmp(dir, basename, p - basename) != 0) {
-			strncpy(dir, basename, p - basename);
-			debug( "  readdir path '%s' with basename '%s' and obj '%s' is new dir\n", path, basename, dir);
+			memset(dir, 0, sizeof(dir));
+			strncpy(dir, basename, p - basename );
+			debug( "  readdir path '%s' with basename '%s' and obj '%s' is new dir, adding\n", path, basename, dir);
 			filler(buf, dir, NULL, 0);
 		}
 	}
