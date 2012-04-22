@@ -36,7 +36,7 @@ git_index_entry *git_index_entry_by_file(const char *path) {
 	ecount = git_index_entrycount(g_index);
 	for (i = 0; i < ecount; ++i) {
 		git_index_entry *e = git_index_get(g_index, i);
-		debug( "  git_index_entry_by_file iterating over %s\n", e->path);
+		//debug( "  git_index_entry_by_file iterating over %s\n", e->path);
 
 		if (! strcmp(e->path, path) == 0)
 			continue;
@@ -59,7 +59,7 @@ int is_dir(const char *path) {
 	for (i = 0; i < ecount; ++i) {
 		git_index_entry *e = git_index_get(g_index, i);
 		if (strncmp(path, e->path, strlen(path)) != 0) {
-			debug("  path '%s' not a substring of '%s'\n", path, e->path);
+			//debug("  path '%s' not a substring of '%s'\n", path, e->path);
 			continue;
 		}
 		if (e->path[ strlen(path) ] == '/') {
@@ -83,9 +83,10 @@ int git_getattr(const char *path, struct stat *stbuf)
 	if ( is_dir(path) ) {
 		debug( "git_getattr for dir -> %s\n", path);
 		stbuf->st_mode = 0040755;
+		stbuf->st_nlink = 2;
 		stbuf->st_gid = 0;
 		stbuf->st_uid = 0;
-		stbuf->st_size = 0;
+		stbuf->st_size = 4096;
 		return 0;
 	}
 	debug( "  get_attr not a dir %s\n", path);
@@ -115,15 +116,20 @@ int git_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	ecount = git_index_entrycount(g_index);
 	for (i = 0; i < ecount; ++i) {
 		git_index_entry *e = git_index_get(g_index, i);
+		memset(file, 0, sizeof(file));
 		strncpy(file, e->path, strlen(e->path)+1);
-		debug( "  readdir for '%s' got '%s' from epath '%s'\n",path, file, e->path);
+		//debug( "  readdir for '%s' got '%s' from epath '%s'\n",path, file, e->path);
 		if (strncmp(path, file, strlen(path)) != 0 && strlen(path) != 0) {
-			debug( "  readdir path '%s' not init substring of '%s'\n",path, file);
+			//debug( "  readdir path '%s' not init substring of '%s'\n",path, file);
 			continue;
 		}
 		basename = (char *)file + strlen(path);
-		if ( *basename == '/')
+
+		if ( strlen(path) > 0 &&  *basename != '/')
+			continue;
+		if ( strlen(path) > 0 &&  *basename == '/')
 			basename++;
+
 		debug( "  readdir using basename '%s'\n", basename);
 		if ( (p = strchr(basename, '/')) == NULL) {
 			debug( "  readdir path '%s' and obj '%s' is basename, adding\n", path, basename);
@@ -165,13 +171,13 @@ int git_read(const char *path, char *buf, size_t size, off_t offset,
 	git_odb_read(&obj, g_odb, &oid);
 	debug( "git_read got %ld bytes\n", (long)(git_odb_object_size(obj)));
 
-	memset(buf, 0, size);
+	memset(buf, 0, sizeof(buf));
 	if (offset >= git_odb_object_size(obj)) {
 		size = 0; goto ending;
 	}
 	if (offset + size > git_odb_object_size(obj))
 		size = git_odb_object_size(obj) - offset;
-	memcpy(buf, git_odb_object_data(obj), size);
+	memcpy(buf, git_odb_object_data(obj) + offset, size);
 
 	debug( "git_read copied %d bytes\n", (int)size);
 ending:
