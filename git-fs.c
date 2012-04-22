@@ -7,10 +7,14 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <stdarg.h>
-
 #include <git2.h>
+
+/* http://pubs.opengroup.org/onlinepubs/009695399/basedefs/limits.h.html
+ */
+#ifndef PATH_MAX
+	#include <linux/limits.h>
+#endif
 
 git_repository *g_repo = NULL;
 git_tree *g_tree = NULL;
