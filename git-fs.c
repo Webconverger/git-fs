@@ -202,7 +202,6 @@ struct fuse_operations git_oper = {
 	.readdir= git_readdir,
 	.open= git_open,
 	.read= git_read,
-	.readdir= git_readdir,
 	.readlink= git_readlink
 };
 
