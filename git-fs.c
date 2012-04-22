@@ -187,9 +187,13 @@ ending:
 
 int git_readlink(const char *path, char *buf, size_t size) {
 	struct fuse_file_info fi;
+	int len = 0;
 
-	if ( git_read(path, buf, size, 0, &fi) > 0 )
+	memset(buf, 0, sizeof(buf));
+	if ( (len = git_read(path, buf, size, 0, &fi)) > 0 ) {
+		buf[len] = '\0';
 		return 0;
+	}
 	return -ENOENT;
 }
 
