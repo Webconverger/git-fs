@@ -23,7 +23,7 @@ git_odb *g_odb;
 
 void debug(const char* format, ...) {
 	va_list args;
-	if (getenv("DEBUG") == NULL)
+	if (getenv("GITFS_DEBUG") == NULL)
 		return;
 	va_start(args,format);
 	vfprintf(stderr, format, args);
@@ -222,7 +222,7 @@ int main(int argc, char *argv[])
 	git_index_read(g_index);
 	git_repository_odb(&g_odb, g_repo);
 
-	if (getenv("DEBUG") != NULL)
+	if (getenv("GITFS_DEBUG") != NULL)
 		return fuse_main(3, debug_args, &git_oper);
 
 	return fuse_main(2, args, &git_oper);
