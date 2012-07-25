@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <git2.h>
+#include <unistd.h>
 
 /* http://pubs.opengroup.org/onlinepubs/009695399/basedefs/limits.h.html
  */
@@ -23,6 +24,7 @@ git_odb *g_odb;
 
 char *gitfs_repo_path = NULL;
 int enable_debug = 0;
+int retval;
 
 
 #define error(...) fprintf(stderr, __VA_ARGS__)
@@ -174,7 +176,9 @@ int git_read(const char *path, char *buf, size_t size, off_t offset,
 		return debug("path no exist? %s\n", path),-ENOENT;
 
 	oid = e->oid;
-	git_odb_read(&obj, g_odb, &oid);
+	if (git_odb_read(&obj, g_odb, &oid))
+		return debug( "%s\n", giterr_last()->message), -ENOENT;
+
 	debug( "git_read got %ld bytes\n", (long)(git_odb_object_size(obj)));
 
 	//memset(buf, 0, size);
@@ -203,7 +207,56 @@ int git_readlink(const char *path, char *buf, size_t size) {
 	return -ENOENT;
 }
 
+void* git_init(void) {
+	/* Start by chrooting into the git repository. Doing this allows
+	 * git-fs to be started from within initrd and not break if
+	 * mount points are shuffled around, causing the location of the
+	 * git repository to change. By chrooting into the .git dir,
+	 * anything can happen, except for unmounting it completely.
+	 * Note that we can't do this chroot in main(), since fuse_main
+	 * needs /dev/fuse and possibly /dev/null and others too... */
+	debug("chrooting to %s\n", gitfs_repo_path);
+
+	if (chroot(gitfs_repo_path) < 0) {
+		error("Failed to chroot to %s: %s", gitfs_repo_path, strerror(errno));
+		goto err;
+	}
+	if (chdir("/") < 0) {
+		error("Failed to chdir to /: %s", strerror(errno));
+		goto err;
+	}
+
+	debug("opening repo\n");
+
+	if (git_repository_open(&g_repo, "/") < 0) {
+		error("Cannot open git repository: %s\n", giterr_last()->message);
+		goto err;
+	}
+
+	git_repository_index(&g_index, g_repo);
+	git_index_read(g_index);
+	git_repository_odb(&g_odb, g_repo);
+
+	/* This return value can be accessed through
+	 * fuse_get_context()->user_data */
+	return NULL;
+
+err:
+	if (g_repo) {git_repository_free(g_repo); g_repo = NULL;}
+	if (g_index) {git_index_free(g_index); g_index = NULL;}
+	if (g_odb) {git_odb_free(g_odb); g_odb = NULL;}
+
+	/* Tell fuse to exit the mainloop (doesn't exit immediately) */
+	fuse_exit(fuse_get_context()->fuse);
+
+	/* Store a return value, so we don't return success when the
+	 * mounting failed */
+	retval = 1;
+	return NULL;
+}
+
 struct fuse_operations gitfs_oper = {
+	.init= git_init,
 	.getattr= git_getattr,
 	.readdir= git_readdir,
 	.open= git_open,
@@ -258,14 +311,9 @@ int main(int argc, char *argv[])
 	if (stat(gitfs_repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
 		return error("%s: path does not exist?", gitfs_repo_path), 1;
 
-	if (git_repository_open(&g_repo, gitfs_repo_path) < 0)
-		return perror("repo"), 1;
-
-	git_repository_index(&g_index, g_repo);
-	git_index_read(g_index);
-	git_repository_odb(&g_odb, g_repo);
-
-
-	return fuse_main(args.argc, args.argv, &gitfs_oper);
+	/* Allow git_init to change our exit code */
+	retval = 0;
+	fuse_main(args.argc, args.argv, &gitfs_oper);
+	return retval;
 }
 
