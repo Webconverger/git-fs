@@ -19,17 +19,21 @@
 	#include <linux/limits.h>
 #endif
 
-git_repository *g_repo = NULL;
-git_tree *g_tree = NULL;
-git_index *g_index = NULL;
-git_odb *g_odb;
-
 char *gitfs_repo_path = NULL;
 int enable_debug = 0;
 int retval;
 
+struct gitfs_data {
+	git_repository *repo;
+	git_tree *tree;
+};
 
 #define error(...) fprintf(stderr, __VA_ARGS__)
+
+/* Macro to hide the ugly casts needed to access fi->fh (which is a
+ * uint64_t, which can store pointers, but is too big on 32-bit systems,
+ * requiring multiple casts to silence the compiler warnings). */
+#define GITFS_FH(fi) ((git_tree_entry *)(intptr_t)fi->fh)
 
 void debug(const char* format, ...) {
 	va_list args;
@@ -40,176 +44,172 @@ void debug(const char* format, ...) {
 	va_end(args);
 }
 
-git_index_entry *git_index_entry_by_file(const char *path) {
-	unsigned int i, ecount;
-	debug( "git_index_entry_by_file for %s\n", path);
-	ecount = git_index_entrycount(g_index);
-	for (i = 0; i < ecount; ++i) {
-		git_index_entry *e = git_index_get(g_index, i);
-		//debug( "  git_index_entry_by_file iterating over %s\n", e->path);
+int gitfs_lookup_tree_entry(git_tree_entry **out, const char *path) {
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
 
-		if (! strcmp(e->path, path) == 0)
-			continue;
-		return e;
-	}
-	return NULL;
-}
-
-int is_dir(const char *path) {
-	int ecount, i;
-
-	debug("is_dir looking for '%s'\n", path);
-
-	if (strcmp(path, "") == 0) {
-		debug("  empty path is a dir, '%s'\n", path);
-		return 1;
-	}
-
-	ecount = git_index_entrycount(g_index);
-	for (i = 0; i < ecount; ++i) {
-		git_index_entry *e = git_index_get(g_index, i);
-		if (strncmp(path, e->path, strlen(path)) != 0) {
-			//debug("  path '%s' not a substring of '%s'\n", path, e->path);
-			continue;
-		}
-		if (e->path[ strlen(path) ] == '/') {
-			debug("  prefix same, next char is slash for '%s' in '%s'\n", path, e->path);
-			return 1;
-		}
-		if (strcmp(path, e->path) == 0) {
-			debug("is_dir found file '%s'\n", e->path);
-			return 0;
-		}
-	}
-	debug("is_dir could not find path '%s'\n", path);
-	return 0;
-}
-
-int git_getattr(const char *path, struct stat *stbuf)
-{
-	path++;
-	memset(stbuf, 0, sizeof(struct stat));
-	debug("getattr stripped to '%s'\n", path);
-	if ( is_dir(path) ) {
-		debug( "git_getattr for dir -> %s\n", path);
-		stbuf->st_mode = 0040755;
-		stbuf->st_nlink = 2;
-		stbuf->st_gid = 0;
-		stbuf->st_uid = 0;
-		stbuf->st_size = 4096;
+	if (path[0] == '/' && path[1] == '\0') {
+		/* We can't use git_tree_entry_bypath for the root path,
+		 * so short circuit here. Also set out to 0 to signal
+		 * this special case (there exists no git_tree_entry for
+		 * the root path since the root path is not an entry in
+		 * any other tree). */
+		*out = NULL;
 		return 0;
 	}
-	debug( "  get_attr not a dir %s\n", path);
-	git_index_entry *e;
-	if ( (e = git_index_entry_by_file(path)) == NULL)
-		return debug("path no exist? %s\n", path),-ENOENT;
-
-	stbuf->st_mode = e->mode;
-	stbuf->st_gid = e->gid;
-	stbuf->st_uid = e->uid;
-	stbuf->st_nlink = 1;
-	stbuf->st_size = e->file_size;
+	if (git_tree_entry_bypath(out, d->tree, path + 1) < 0)
+		return -ENOENT;
 	return 0;
 }
 
-int git_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+int gitfs_open(const char *path, struct fuse_file_info *fi)
+{
+	/* Find the corresponding entry and store it inside the fh
+	 * member, for use in other operations. */
+	return gitfs_lookup_tree_entry((git_tree_entry**)&fi->fh, path);
+}
+
+int gitfs_release(const char *path, struct fuse_file_info *fi)
+{
+	/* Free the tree_entry pointer in fh */
+	if(fi->fh)
+		git_tree_entry_free(GITFS_FH(fi));
+	return 0;
+}
+
+int gitfs_getattr(const char *path, struct stat *stbuf)
+{
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
+	debug("Getattr called for '%s'\n", path);
+	git_tree_entry *e;
+	if (gitfs_lookup_tree_entry(&e, path) < 0)
+		return debug("Path does not exist: '%s'\n", path), -ENOENT;
+
+	memset(stbuf, 0, sizeof(struct stat));
+
+
+	if (!e || git_tree_entry_type(e) == GIT_OBJ_TREE) {
+		debug( "Path is a directory: '%s'\n", path);
+		stbuf->st_nlink = 2;
+		stbuf->st_mode = 040755;
+		stbuf->st_size = 4096;
+	} else if (git_tree_entry_type(e) == GIT_OBJ_BLOB) {
+		debug( "Path is a file: '%s'\n", path);
+		stbuf->st_nlink = 1;
+		stbuf->st_mode = git_tree_entry_attributes(e);
+		git_blob *blob;
+		git_tree_entry_to_object((git_object**)&blob, d->repo, e);
+		stbuf->st_size = git_blob_rawsize(blob);
+		git_blob_free(blob);
+	} else if (git_tree_entry_type(e) == GIT_OBJ_COMMIT) {
+		return debug("Ignoring submodule entry: '%s'\n", path), -ENOENT;
+	} else {
+		return debug("Ignoring unknown entry: '%s'\n", path), -ENOENT;
+	}
+
+	stbuf->st_gid = 0;
+	stbuf->st_uid = 0;
+
+	return 0;
+}
+
+int gitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		off_t offset, struct fuse_file_info *fi)
 {
-	(void) offset;
-	(void) fi;
-	int i, ecount = 0;
-	char dir[PATH_MAX], file[PATH_MAX], *p, *basename;
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
+	debug("readdir called for '%s'\n", path);
+	git_tree_entry *e = GITFS_FH(fi);
+	git_tree *t;
+	if (e && git_tree_entry_type(e) != GIT_OBJ_TREE)
+		return debug("Path is not a directory?!: '%s'\n", path), -EIO;
 
-	path++; // drop initial slash
-	debug( "git_readdir for %s\n", path);
-	memset(dir, 0, sizeof(dir));
-	ecount = git_index_entrycount(g_index);
-	for (i = 0; i < ecount; ++i) {
-		git_index_entry *e = git_index_get(g_index, i);
-		memset(file, 0, sizeof(file));
-		strncpy(file, e->path, strlen(e->path)+1);
-		//debug( "  readdir for '%s' got '%s' from epath '%s'\n",path, file, e->path);
-		if (strncmp(path, file, strlen(path)) != 0 && strlen(path) != 0) {
-			//debug( "  readdir path '%s' not init substring of '%s'\n",path, file);
-			continue;
-		}
-		basename = (char *)file + strlen(path);
+	/* Convert the entry into a tree object. Note that the root tree
+	 * is handled special by gitfs_lookup_tree_entry, since no
+	 * git_tree_entry exists for it. */
+	if (e == NULL) {
+		t = d->tree;
+	} else {
+		if (git_tree_entry_to_object((git_object**)&t, d->repo, e) < 0)
+			return error("Blob not found?!: '%s'\n", path), -EIO;
+	}
 
-		if ( strlen(path) > 0 &&  *basename != '/')
-			continue;
-		if ( strlen(path) > 0 &&  *basename == '/')
-			basename++;
 
-		debug( "  readdir using basename '%s'\n", basename);
-		if ( (p = strchr(basename, '/')) == NULL) {
-			debug( "  readdir path '%s' and obj '%s' is basename, adding\n", path, basename);
-			filler(buf, basename, NULL, 0);
-			continue;
-		}
-		if (strncmp(dir, basename, p - basename) != 0) {
-			memset(dir, 0, sizeof(dir));
-			strncpy(dir, basename, p - basename );
-			debug( "  readdir path '%s' with basename '%s' and obj '%s' is new dir, adding\n", path, basename, dir);
-			filler(buf, dir, NULL, 0);
-		}
+	int entry_count = git_tree_entrycount(t);
+	while (offset < entry_count) {
+		const git_tree_entry *entry = git_tree_entry_byindex(t, offset);
+		/* Add the entry to the list. The offset passed is the
+		 * offset to the _next_ entry. If filler returns 1, buf
+		 * is full, and we should stop trying to add entries.
+		 * Note that the the last entry is _not_ added in this
+		 * case. Future calls readdir will have offset
+		 * appropriately set to the value passed to filler with
+		 * the last successful addition. */
+		if (filler(buf, git_tree_entry_name(entry), NULL, offset + 1) == 1)
+			return 0;
+		offset++;
 	}
 
 	return 0;
 }
 
-int git_open(const char *path, struct fuse_file_info *fi)
-{
-	path++;
-	return 0;
-}
-
-int git_read(const char *path, char *buf, size_t size, off_t offset,
+int gitfs_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
-	(void) fi;
-	git_index_entry *e;
-	git_odb_object *obj;
-	git_oid oid;
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
+	debug("read called for '%s'\n", path);
+	git_tree_entry *e = GITFS_FH(fi);
+	git_blob *blob;
+	if (!e || git_tree_entry_type(e) != GIT_OBJ_BLOB || !S_ISREG(git_tree_entry_attributes(e)))
+		return error("Path is not a file?!: '%s'\n", path), -EIO;
 
-	path++;
-	debug("git_read for -> %s with offset %d size %d\n", path, (int)offset, (int)size );
+	if (git_tree_entry_to_object((git_object**)&blob, d->repo, e) < 0)
+		return error("Blob not found?!: '%s'\n", path), -EIO;
 
-	if ( (e = git_index_entry_by_file(path)) == NULL)
-		return debug("path no exist? %s\n", path),-ENOENT;
+	int blob_size = git_blob_rawsize(blob);
 
-	oid = e->oid;
-	if (git_odb_read(&obj, g_odb, &oid))
-		return debug( "%s\n", giterr_last()->message), -ENOENT;
+	if (offset >= blob_size)
+		size = 0;
+	else if (offset + size > blob_size)
+		size = blob_size - offset;
 
-	debug( "git_read got %ld bytes\n", (long)(git_odb_object_size(obj)));
+	if (size)
+		memcpy(buf, git_blob_rawcontent(blob) + offset, size);
 
-	//memset(buf, 0, size);
-	if (offset >= git_odb_object_size(obj)) {
-		size = 0; goto ending;
-	}
-	if (offset + size > git_odb_object_size(obj))
-		size = git_odb_object_size(obj) - offset;
-	memcpy(buf, git_odb_object_data(obj) + offset, size);
+	debug( "read copied %d bytes\n", (int)size);
 
-	debug( "git_read copied %d bytes\n", (int)size);
-ending:
-	git_odb_object_free(obj);
+	git_blob_free(blob);
 	return size;
 }
 
-int git_readlink(const char *path, char *buf, size_t size) {
-	struct fuse_file_info fi;
-	int len = 0;
+int gitfs_readlink(const char *path, char *buf, size_t size) {
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
+	debug("read called for '%s'\n", path);
+	git_tree_entry *e;
+	git_blob *blob;
 
-	//memset(buf, 0, sizeof(buf));
-	if ( (len = git_read(path, buf, size, 0, &fi)) > 0 ) {
-		buf[len] = '\0';
-		return 0;
-	}
-	return -ENOENT;
+	/* Sanity checks */
+	if (gitfs_lookup_tree_entry(&e, path) < 0)
+		return debug("Path does not exist: '%s'\n", path), -ENOENT;
+
+	if (git_tree_entry_type(e) != GIT_OBJ_BLOB || !S_ISLNK(git_tree_entry_attributes(e)))
+		return debug("Path is not a link?!: '%s'\n", path), -EIO;
+
+	if (git_tree_entry_to_object((git_object**)&blob, d->repo, e) < 0)
+		return error("Blob not found?!: '%s'\n", path), -EIO;
+
+	int blob_size = git_blob_rawsize(blob);
+
+	/* If the blob is too big for buf (keeping room for the trailing
+	 * NUL), truncate (as per fuse docs) */
+	if (blob_size  > size - 1)
+		blob_size = size - 1;
+
+	memcpy(buf, git_blob_rawcontent(blob), blob_size);
+	buf[blob_size] = '\0';
+
+	return 0;
 }
 
-void* git_init(void) {
+void* gitfs_init(void) {
 	/* Start by chrooting into the git repository. Doing this allows
 	 * git-fs to be started from within initrd and not break if
 	 * mount points are shuffled around, causing the location of the
@@ -228,25 +228,46 @@ void* git_init(void) {
 		goto err;
 	}
 
-	debug("opening repo\n");
+	struct gitfs_data *d = calloc(1, sizeof(struct gitfs_data));
+	if (!d) {
+		error("Failed to allocate memory for userdata\n");
+		goto err;
+	}
 
-	if (git_repository_open(&g_repo, "/") < 0) {
+	debug("opening repo\n");
+	if (git_repository_open(&d->repo, "/") < 0) {
 		error("Cannot open git repository: %s\n", giterr_last()->message);
 		goto err;
 	}
 
-	git_repository_index(&g_index, g_repo);
-	git_index_read(g_index);
-	git_repository_odb(&g_odb, g_repo);
+
+	git_oid oid;
+	git_commit *commit;
+
+	if (git_reference_name_to_oid(&oid, d->repo, "HEAD") < 0) {
+		error("Failed to resolve ref: HEAD");
+		goto err;
+	}
+
+	if (git_commit_lookup(&commit, d->repo, &oid) < 0) {
+		error("Failed to lookup commit");
+		goto err;
+	}
+
+	if (git_commit_tree(&d->tree, commit) < 0) {
+		error("Failed to lookup tree");
+		goto err;
+	}
+	git_commit_free(commit);
 
 	/* This return value can be accessed through
-	 * fuse_get_context()->user_data */
-	return NULL;
+	 * fuse_get_context()->private_data */
+	return (void*)d;
 
 err:
-	if (g_repo) {git_repository_free(g_repo); g_repo = NULL;}
-	if (g_index) {git_index_free(g_index); g_index = NULL;}
-	if (g_odb) {git_odb_free(g_odb); g_odb = NULL;}
+	if (commit) {git_commit_free(commit);}
+	if (d->tree) {git_tree_free(d->tree); d->tree = NULL;}
+	if (d->repo) {git_repository_free(d->repo); d->repo = NULL;}
 
 	/* Tell fuse to exit the mainloop (doesn't exit immediately) */
 	fuse_exit(fuse_get_context()->fuse);
@@ -258,12 +279,16 @@ err:
 }
 
 struct fuse_operations gitfs_oper = {
-	.init= git_init,
-	.getattr= git_getattr,
-	.readdir= git_readdir,
-	.open= git_open,
-	.read= git_read,
-	.readlink= git_readlink
+	.init= gitfs_init,
+	.open= gitfs_open,
+	.release= gitfs_release,
+	/* Reuse open/release for directories */
+	.opendir= gitfs_open,
+	.releasedir= gitfs_release,
+	.getattr= gitfs_getattr,
+	.readdir= gitfs_readdir,
+	.read= gitfs_read,
+	.readlink= gitfs_readlink
 };
 
 enum {
