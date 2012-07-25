@@ -21,9 +21,15 @@ git_tree *g_tree = NULL;
 git_index *g_index = NULL;
 git_odb *g_odb;
 
+char *gitfs_repo_path = NULL;
+int enable_debug = 0;
+
+
+#define error(...) fprintf(stderr, __VA_ARGS__)
+
 void debug(const char* format, ...) {
 	va_list args;
-	if (getenv("GITFS_DEBUG") == NULL)
+	if (!enable_debug)
 		return;
 	va_start(args,format);
 	vfprintf(stderr, format, args);
@@ -197,7 +203,7 @@ int git_readlink(const char *path, char *buf, size_t size) {
 	return -ENOENT;
 }
 
-struct fuse_operations git_oper = {
+struct fuse_operations gitfs_oper = {
 	.getattr= git_getattr,
 	.readdir= git_readdir,
 	.open= git_open,
@@ -205,26 +211,61 @@ struct fuse_operations git_oper = {
 	.readlink= git_readlink
 };
 
+enum {
+	KEY_DEBUG,
+	KEY_RW,
+};
+
+static struct fuse_opt gitfs_opts[] = {
+	FUSE_OPT_KEY("-d",             KEY_DEBUG),
+	FUSE_OPT_KEY("debug",          KEY_DEBUG),
+	FUSE_OPT_KEY("rw",             KEY_RW),
+	FUSE_OPT_END
+};
+
+static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
+{
+	/* The first non-option argument is the repo path */
+	if (key == FUSE_OPT_KEY_NONOPT && gitfs_repo_path == NULL) {
+		gitfs_repo_path = strdup(arg);
+		/* Don't pass this option onto fuse_main */
+		return 0;
+	} else if (key == KEY_DEBUG) {
+		enable_debug = 1;
+		/* Pass this option onto fuse_main */
+		return 1;
+	} else if (key == KEY_RW) {
+		error("Mounting read-write not supported, ignoring rw option\n");
+		/* Don't pass this option onto fuse_main */
+		return 0;
+	}
+
+	/* Pass all other options to fuse_main */
+	return 1;
+}
+
 int main(int argc, char *argv[])
 {
-	char *r,*m;
-	char *args[]= { argv[0], argv[2] };
-	char *debug_args[] = { argv[0], "-f", argv[2] };
+	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+	struct stat st;
 
-	r = argv[1];
-	m = argv[2];
-	debug("mounting repo %s on %s\n",r, m);
+	if (fuse_opt_parse(&args, NULL, gitfs_opts, gitfs_opt_proc))
+		return error("Invalid arguments\n"), 1;
 
-	if (git_repository_open(&g_repo, r) < 0)
+	if (gitfs_repo_path == NULL)
+		return error("No repository path given\n"), 1;
+
+	if (stat(gitfs_repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
+		return error("%s: path does not exist?", gitfs_repo_path), 1;
+
+	if (git_repository_open(&g_repo, gitfs_repo_path) < 0)
 		return perror("repo"), 1;
 
 	git_repository_index(&g_index, g_repo);
 	git_index_read(g_index);
 	git_repository_odb(&g_odb, g_repo);
 
-	if (getenv("GITFS_DEBUG") != NULL)
-		return fuse_main(3, debug_args, &git_oper);
 
-	return fuse_main(2, args, &git_oper);
+	return fuse_main(args.argc, args.argv, &gitfs_oper);
 }
 
