@@ -57,22 +57,29 @@ typedef struct gitfs_entry {
 } gitfs_entry;
 
 void gitfs_entry_free(gitfs_entry *e) {
-	if (e->tree_entry)
-		git_tree_entry_free(e->tree_entry);
-	if (e->type == GIT_OBJ_TREE)
+	if (e->type == GIT_OBJ_TREE && e->tree_entry != NULL)
+		/* Don't free the tree when tree_entry is NULL, since
+		 * that's the root tree */
 		git_tree_free(e->object.tree);
 	else if (e->type == GIT_OBJ_BLOB)
 		git_blob_free(e->object.blob);
+
+	if (e->tree_entry)
+		git_tree_entry_free(e->tree_entry);
 
 	free(e);
 }
 
 int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
+	int retval = 0;
 
-	gitfs_entry *e = *out = malloc(sizeof(gitfs_entry));
-	if (!e)
-		return error("Failed to allocate memory for entry: '%s'\n", path), -ENOMEM;
+	gitfs_entry *e = *out = calloc(1, sizeof(gitfs_entry));
+	if (!e) {
+		error("Failed to allocate memory for entry: '%s'\n", path);
+		retval = -ENOMEM;
+		goto out;
+	}
 
 	if (path[0] == '/' && path[1] == '\0') {
 		/* We can't use git_tree_entry_bypath for the root path,
@@ -86,8 +93,11 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 		return 0;
 	}
 	/* Fill e->tree_entry */
-	if (git_tree_entry_bypath(&e->tree_entry, d->tree, path + 1) < 0)
-		return -ENOENT;
+	if (git_tree_entry_bypath(&e->tree_entry, d->tree, path + 1) < 0) {
+		debug("File not found: '%s'\n", path);
+		retval = -ENOENT;
+		goto out;
+	}
 
 	/* Fill e->type */
 	e->type = git_tree_entry_type(e->tree_entry);
@@ -95,18 +105,33 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 	/* Fill e->object */
 	if (e->type == GIT_OBJ_TREE) {
 		/* Lookup the corresponding git_tree object */
-		if (git_tree_entry_to_object((git_object**)&e->object.tree, d->repo, e->tree_entry) < 0)
-			return error("Tree not found?!: '%s'\n", path), -EIO;
+		if (git_tree_entry_to_object((git_object**)&e->object.tree, d->repo, e->tree_entry) < 0) {
+			error("Tree not found?!: '%s'\n", path);
+			retval = -EIO;
+			goto out;
+		}
 	} else if (e->type == GIT_OBJ_BLOB) {
 		/* Lookup the corresponding git_blob object */
-		if (git_tree_entry_to_object((git_object**)&e->object.blob, d->repo, e->tree_entry) < 0)
-			return error("Blob not found?!: '%s'\n", path), -EIO;
+		if (git_tree_entry_to_object((git_object**)&e->object.blob, d->repo, e->tree_entry) < 0) {
+			error("Blob not found?!: '%s'\n", path);
+			retval = -EIO;
+			goto out;
+		}
 	} else if (e->type == GIT_OBJ_COMMIT) {
-		return debug("Ignoring submodule entry: '%s'\n", path), -ENOENT;
+		debug("Ignoring submodule entry: '%s'\n", path);
+		retval = -ENOENT;
+		goto out;
 	} else {
-		return debug("Ignoring unknown entry: '%s'\n", path), -ENOENT;
+		debug("Ignoring unknown entry: '%s'\n", path);
+		retval = -ENOENT;
+		goto out;
 	}
-	return 0;
+out:
+	if (retval < 0 && e) {
+		gitfs_entry_free(e);
+		*out = 0;
+	}
+	return retval;
 }
 
 int gitfs_open(const char *path, struct fuse_file_info *fi)
@@ -126,13 +151,13 @@ int gitfs_release(const char *path, struct fuse_file_info *fi)
 
 int gitfs_getattr(const char *path, struct stat *stbuf)
 {
+	int retval = 0;
 	debug("Getattr called for '%s'\n", path);
-	gitfs_entry *e;
-	if (gitfs_lookup_entry(&e, path) < 0)
-		return debug("Path does not exist: '%s'\n", path), -ENOENT;
+	gitfs_entry *e = NULL;
+	if ((retval = gitfs_lookup_entry(&e, path)) < 0)
+		goto out;
 
 	memset(stbuf, 0, sizeof(struct stat));
-
 
 	if (e->type == GIT_OBJ_TREE) {
 		debug( "Path is a directory: '%s'\n", path);
@@ -145,13 +170,19 @@ int gitfs_getattr(const char *path, struct stat *stbuf)
 		stbuf->st_mode = git_tree_entry_attributes(e->tree_entry);
 		stbuf->st_size = git_blob_rawsize(e->object.blob);
 	} else {
-		return error("Unsupported type?!\n"), -EIO;
+		error("Unsupported type?!\n");
+		retval = -EIO;
+		goto out;
 	}
 
 	stbuf->st_gid = 0;
 	stbuf->st_uid = 0;
 
-	return 0;
+out:
+	if (e)
+		gitfs_entry_free(e);
+
+	return retval;
 }
 
 int gitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
@@ -159,7 +190,7 @@ int gitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 {
 	debug("readdir called for '%s'\n", path);
 	gitfs_entry *e = GITFS_FH(fi);
-	if (e-> type != GIT_OBJ_TREE)
+	if (e->type != GIT_OBJ_TREE)
 		return debug("Path is not a directory?!: '%s'\n", path), -EIO;
 
 	int entry_count = git_tree_entrycount(e->object.tree);
@@ -203,15 +234,19 @@ int gitfs_read(const char *path, char *buf, size_t size, off_t offset,
 }
 
 int gitfs_readlink(const char *path, char *buf, size_t size) {
+	int retval = 0;
 	debug("read called for '%s'\n", path);
-	gitfs_entry *e;
+	gitfs_entry *e = NULL;
 
 	/* Sanity checks */
-	if (gitfs_lookup_entry(&e, path) < 0)
-		return debug("Path does not exist: '%s'\n", path), -ENOENT;
+	if ((retval = gitfs_lookup_entry(&e, path)) < 0)
+		goto out;
 
-	if (e->type != GIT_OBJ_BLOB || !S_ISLNK(git_tree_entry_attributes(e->tree_entry)))
-		return debug("Path is not a link?!: '%s'\n", path), -EIO;
+	if (e->type != GIT_OBJ_BLOB || !S_ISLNK(git_tree_entry_attributes(e->tree_entry))) {
+		debug("Path is not a link?!: '%s'\n", path);
+		retval = -EIO;
+		goto out;
+	}
 
 	int blob_size = git_blob_rawsize(e->object.blob);
 
@@ -223,7 +258,20 @@ int gitfs_readlink(const char *path, char *buf, size_t size) {
 	memcpy(buf, git_blob_rawcontent(e->object.blob), blob_size);
 	buf[blob_size] = '\0';
 
-	return 0;
+out:
+	if (e)
+		gitfs_entry_free(e);
+	return retval;
+}
+
+void gitfs_destroy(void *private_data) {
+	struct gitfs_data *d = (struct gitfs_data *)private_data;
+
+	if (d) {
+		if (d->tree) git_tree_free(d->tree);
+		if (d->repo) git_repository_free(d->repo);
+		free(d);
+	}
 }
 
 void* gitfs_init(void) {
@@ -282,9 +330,8 @@ void* gitfs_init(void) {
 	return (void*)d;
 
 err:
-	if (commit) {git_commit_free(commit);}
-	if (d->tree) {git_tree_free(d->tree); d->tree = NULL;}
-	if (d->repo) {git_repository_free(d->repo); d->repo = NULL;}
+	if (commit) git_commit_free(commit);
+	gitfs_destroy((void*)d);
 
 	/* Tell fuse to exit the mainloop (doesn't exit immediately) */
 	fuse_exit(fuse_get_context()->fuse);
@@ -297,6 +344,7 @@ err:
 
 struct fuse_operations gitfs_oper = {
 	.init= gitfs_init,
+	.destroy= gitfs_destroy,
 	.open= gitfs_open,
 	.release= gitfs_release,
 	/* Reuse open/release for directories */
