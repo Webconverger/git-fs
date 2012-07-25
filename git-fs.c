@@ -2,6 +2,8 @@
  * fuse + libgit2 = read-only mounting of bare repos
  */
 
+#define FUSE_USE_VERSION 25
+#define _FILE_OFFSET_BITS 64
 #include <fuse.h>
 #include <stdio.h>
 #include <string.h>
