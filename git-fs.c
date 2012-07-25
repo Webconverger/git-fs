@@ -177,7 +177,7 @@ int git_read(const char *path, char *buf, size_t size, off_t offset,
 	git_odb_read(&obj, g_odb, &oid);
 	debug( "git_read got %ld bytes\n", (long)(git_odb_object_size(obj)));
 
-	memset(buf, 0, sizeof(buf));
+	//memset(buf, 0, size);
 	if (offset >= git_odb_object_size(obj)) {
 		size = 0; goto ending;
 	}
@@ -195,7 +195,7 @@ int git_readlink(const char *path, char *buf, size_t size) {
 	struct fuse_file_info fi;
 	int len = 0;
 
-	memset(buf, 0, sizeof(buf));
+	//memset(buf, 0, sizeof(buf));
 	if ( (len = git_read(path, buf, size, 0, &fi)) > 0 ) {
 		buf[len] = '\0';
 		return 0;
