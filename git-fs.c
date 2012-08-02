@@ -358,13 +358,14 @@ struct fuse_operations gitfs_oper = {
 
 enum {
 	KEY_DEBUG,
-	KEY_RW,
+	KEY_RWRO,
 };
 
 static struct fuse_opt gitfs_opts[] = {
 	FUSE_OPT_KEY("-d",             KEY_DEBUG),
 	FUSE_OPT_KEY("debug",          KEY_DEBUG),
-	FUSE_OPT_KEY("rw",             KEY_RW),
+	FUSE_OPT_KEY("rw",             KEY_RWRO),
+	FUSE_OPT_KEY("ro",             KEY_RWRO),
 	FUSE_OPT_END
 };
 
@@ -383,8 +384,8 @@ static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
 		enable_debug = 1;
 		/* Pass this option onto fuse_main */
 		return 1;
-	} else if (key == KEY_RW) {
-		error("Mounting read-write not supported, ignoring rw option\n");
+	} else if (key == KEY_RWRO) {
+		error("Mount is always read-only, ignoring %s option\n", arg);
 		/* Don't pass this option onto fuse_main */
 		return 0;
 	}
@@ -406,6 +407,9 @@ int main(int argc, char *argv[])
 
 	if (stat(gitfs_repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
 		return error("%s: path does not exist?\n", gitfs_repo_path), 1;
+
+	/* Force the mount to be read-only */
+	fuse_opt_insert_arg(&args, 1, "-oro");
 
 	/* Allow git_init to change our exit code */
 	retval = 0;
