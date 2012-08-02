@@ -372,7 +372,11 @@ static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
 {
 	/* The first non-option argument is the repo path */
 	if (key == FUSE_OPT_KEY_NONOPT && gitfs_repo_path == NULL) {
-		gitfs_repo_path = strdup(arg);
+		gitfs_repo_path = realpath(arg, NULL);
+		if (gitfs_repo_path == NULL) {
+			error("%s: Failed to resolve path: %s\n", arg, strerror(errno));
+			/* main will bail out below */
+		}
 		/* Don't pass this option onto fuse_main */
 		return 0;
 	} else if (key == KEY_DEBUG) {
