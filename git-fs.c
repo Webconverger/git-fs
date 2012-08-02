@@ -285,11 +285,11 @@ void* gitfs_init(void) {
 	debug("chrooting to %s\n", gitfs_repo_path);
 
 	if (chroot(gitfs_repo_path) < 0) {
-		error("Failed to chroot to %s: %s", gitfs_repo_path, strerror(errno));
+		error("Failed to chroot to %s: %s\n", gitfs_repo_path, strerror(errno));
 		goto err;
 	}
 	if (chdir("/") < 0) {
-		error("Failed to chdir to /: %s", strerror(errno));
+		error("Failed to chdir to /: %s\n", strerror(errno));
 		goto err;
 	}
 
@@ -310,17 +310,17 @@ void* gitfs_init(void) {
 	git_commit *commit;
 
 	if (git_reference_name_to_oid(&oid, d->repo, "HEAD") < 0) {
-		error("Failed to resolve ref: HEAD");
+		error("Failed to resolve ref: HEAD\n");
 		goto err;
 	}
 
 	if (git_commit_lookup(&commit, d->repo, &oid) < 0) {
-		error("Failed to lookup commit");
+		error("Failed to lookup commit\n");
 		goto err;
 	}
 
 	if (git_commit_tree(&d->tree, commit) < 0) {
-		error("Failed to lookup tree");
+		error("Failed to lookup tree\n");
 		goto err;
 	}
 	git_commit_free(commit);
@@ -401,7 +401,7 @@ int main(int argc, char *argv[])
 		return error("No repository path given\n"), 1;
 
 	if (stat(gitfs_repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
-		return error("%s: path does not exist?", gitfs_repo_path), 1;
+		return error("%s: path does not exist?\n", gitfs_repo_path), 1;
 
 	/* Allow git_init to change our exit code */
 	retval = 0;
