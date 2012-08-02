@@ -411,6 +411,10 @@ int main(int argc, char *argv[])
 	/* Force the mount to be read-only */
 	fuse_opt_insert_arg(&args, 1, "-oro");
 
+	/* Force fuse to use single-threaded mode, since libgit2 is not
+	 * yet thread-safe. */
+	fuse_opt_insert_arg(&args, 1, "-s");
+
 	/* Allow git_init to change our exit code */
 	retval = 0;
 	fuse_main(args.argc, args.argv, &gitfs_oper);
