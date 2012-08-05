@@ -20,6 +20,7 @@
 #endif
 
 char *gitfs_repo_path = NULL;
+char *gitfs_rev = NULL;
 int enable_debug = 0;
 int retval;
 
@@ -275,6 +276,7 @@ void gitfs_destroy(void *private_data) {
 }
 
 void* gitfs_init(void) {
+	char sha[41];
 	/* Start by chrooting into the git repository. Doing this allows
 	 * git-fs to be started from within initrd and not break if
 	 * mount points are shuffled around, causing the location of the
@@ -308,7 +310,12 @@ void* gitfs_init(void) {
 
 	git_object *obj;
 
+	/* Default to HEAD */
 	char *rev = "HEAD";
+	if (gitfs_rev)
+		rev = gitfs_rev;
+	debug("using rev %s\n", rev);
+
 	if (git_revparse_single(&obj, d->repo, rev) < 0) {
 		error("Failed to resolve rev: %s\n", rev);
 		goto err;
@@ -316,6 +323,10 @@ void* gitfs_init(void) {
 
 	switch (git_object_type(obj)) {
 		case GIT_OBJ_COMMIT:
+			git_oid_fmt(sha, git_commit_id((git_commit*)obj));
+			sha[40] = '\0';
+			debug("using commit %s\n", sha);
+
 			/* rev points to a commit, lookup corresponding
 			 * tree */
 			if (git_commit_tree(&d->tree, (git_commit*)obj) < 0) {
@@ -332,6 +343,10 @@ void* gitfs_init(void) {
 			error("rev does not point to a tree or commit: %s\n", rev);
 			goto err;
 	}
+
+	git_oid_fmt(sha, git_tree_id(d->tree));
+	sha[40] = '\0';
+	debug("using tree %s\n", sha);
 
 
 
@@ -370,6 +385,7 @@ struct fuse_operations gitfs_oper = {
 enum {
 	KEY_DEBUG,
 	KEY_RWRO,
+	KEY_REV,
 };
 
 static struct fuse_opt gitfs_opts[] = {
@@ -377,6 +393,8 @@ static struct fuse_opt gitfs_opts[] = {
 	FUSE_OPT_KEY("debug",          KEY_DEBUG),
 	FUSE_OPT_KEY("rw",             KEY_RWRO),
 	FUSE_OPT_KEY("ro",             KEY_RWRO),
+	FUSE_OPT_KEY("--rev=%s",       KEY_REV),
+	FUSE_OPT_KEY("rev=%s",         KEY_REV),
 	FUSE_OPT_END
 };
 
@@ -397,6 +415,14 @@ static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
 		return 1;
 	} else if (key == KEY_RWRO) {
 		error("Mount is always read-only, ignoring %s option\n", arg);
+		/* Don't pass this option onto fuse_main */
+		return 0;
+	} else if (key == KEY_REV) {
+		if (gitfs_rev != NULL) {
+			error("--rev / -o rev can be passed only once\n");
+			return -1;
+		}
+		gitfs_rev = strdup(strchr(arg, '=') + 1);
 		/* Don't pass this option onto fuse_main */
 		return 0;
 	}
