@@ -306,31 +306,42 @@ void* gitfs_init(void) {
 	}
 
 
-	git_oid oid;
-	git_commit *commit;
+	git_object *obj;
 
-	if (git_reference_name_to_oid(&oid, d->repo, "HEAD") < 0) {
-		error("Failed to resolve ref: HEAD\n");
+	char *rev = "HEAD";
+	if (git_revparse_single(&obj, d->repo, rev) < 0) {
+		error("Failed to resolve rev: %s\n", rev);
 		goto err;
 	}
 
-	if (git_commit_lookup(&commit, d->repo, &oid) < 0) {
-		error("Failed to lookup commit\n");
-		goto err;
+	switch (git_object_type(obj)) {
+		case GIT_OBJ_COMMIT:
+			/* rev points to a commit, lookup corresponding
+			 * tree */
+			if (git_commit_tree(&d->tree, (git_commit*)obj) < 0) {
+				error("Failed to lookup tree for rev: %s\n", rev);
+				goto err;
+			}
+			git_object_free(obj);
+			break;
+		case GIT_OBJ_TREE:
+			/* rev points to a tree, just use it */
+			d->tree = (git_tree*)obj;
+			break;
+		default:
+			error("rev does not point to a tree or commit: %s\n", rev);
+			goto err;
 	}
 
-	if (git_commit_tree(&d->tree, commit) < 0) {
-		error("Failed to lookup tree\n");
-		goto err;
-	}
-	git_commit_free(commit);
+
+
 
 	/* This return value can be accessed through
 	 * fuse_get_context()->private_data */
 	return (void*)d;
 
 err:
-	if (commit) git_commit_free(commit);
+	if (obj) git_object_free(obj);
 	gitfs_destroy((void*)d);
 
 	/* Tell fuse to exit the mainloop (doesn't exit immediately) */
