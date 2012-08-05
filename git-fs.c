@@ -382,19 +382,50 @@ struct fuse_operations gitfs_oper = {
 	.readlink= gitfs_readlink
 };
 
+void usage(struct fuse_args *args, FILE *out) {
+	fprintf(out,
+	     "usage: %s [options] repo-path mountpoint\n"
+	     "\n"
+	     "Mount the repository in repo-path onto mountpoint.\n"
+	     "repo-path should point to the .git directory, not the\n"
+	     "checkout directory (can also point to a bare repository).\n"
+	     "\n"
+	     "general options:\n"
+	     "    -o opt,[opt...]\n"
+	     "        mount options (see below)\n"
+	     "    -h\n"
+	     "    --help\n"
+	     "        print help\n"
+	     "\n"
+	     "git-fs options:\n"
+	     "    -o rev=STRING\n"
+	     "    --rev=STRING\n"
+	     "        Revision to mount. Can be any name that points to\n"
+	     "        a commit or tree object (e.g. a branch name, tag\n"
+	     "        name, symbolic ref, sha). When not specified,\n"
+	     "        HEAD is used.\n"
+	     "\n"
+	     , args->argv[0]);
+             fuse_opt_add_arg(args, "-ho");
+             fuse_main(args->argc, args->argv, &gitfs_oper);
+}
+
 enum {
 	KEY_DEBUG,
-	KEY_RWRO,
+	KEY_HELP,
 	KEY_REV,
+	KEY_RWRO,
 };
 
 static struct fuse_opt gitfs_opts[] = {
 	FUSE_OPT_KEY("-d",             KEY_DEBUG),
 	FUSE_OPT_KEY("debug",          KEY_DEBUG),
-	FUSE_OPT_KEY("rw",             KEY_RWRO),
-	FUSE_OPT_KEY("ro",             KEY_RWRO),
+	FUSE_OPT_KEY("-h",             KEY_HELP),
+	FUSE_OPT_KEY("--help",         KEY_HELP),
 	FUSE_OPT_KEY("--rev=%s",       KEY_REV),
 	FUSE_OPT_KEY("rev=%s",         KEY_REV),
+	FUSE_OPT_KEY("rw",             KEY_RWRO),
+	FUSE_OPT_KEY("ro",             KEY_RWRO),
 	FUSE_OPT_END
 };
 
@@ -425,6 +456,9 @@ static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
 		gitfs_rev = strdup(strchr(arg, '=') + 1);
 		/* Don't pass this option onto fuse_main */
 		return 0;
+	} else if (key == KEY_HELP) {
+		usage(outargs, stdout);
+		exit(0);
 	}
 
 	/* Pass all other options to fuse_main */
@@ -437,10 +471,10 @@ int main(int argc, char *argv[])
 	struct stat st;
 
 	if (fuse_opt_parse(&args, NULL, gitfs_opts, gitfs_opt_proc))
-		return error("Invalid arguments\n"), 1;
+		return 1;
 
 	if (gitfs_repo_path == NULL)
-		return error("No repository path given\n"), 1;
+		return error("No repository path given\n\n"), usage(&args, stderr), 1;
 
 	if (stat(gitfs_repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
 		return error("%s: path does not exist?\n", gitfs_repo_path), 1;
