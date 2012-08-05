@@ -387,7 +387,7 @@ static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
 		gitfs_repo_path = realpath(arg, NULL);
 		if (gitfs_repo_path == NULL) {
 			error("%s: Failed to resolve path: %s\n", arg, strerror(errno));
-			/* main will bail out below */
+			return -1;
 		}
 		/* Don't pass this option onto fuse_main */
 		return 0;
