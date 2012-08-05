@@ -21,6 +21,7 @@
 
 char *gitfs_repo_path = NULL;
 char *gitfs_rev = NULL;
+git_oid gitfs_tree_oid;
 int enable_debug = 0;
 int retval;
 
@@ -301,62 +302,24 @@ void* gitfs_init(void) {
 		goto err;
 	}
 
-	debug("opening repo\n");
+	debug("opening repo after fuse_main\n");
 	if (git_repository_open(&d->repo, "/") < 0) {
 		error("Cannot open git repository: %s\n", giterr_last()->message);
 		goto err;
 	}
 
-
-	git_object *obj;
-
-	/* Default to HEAD */
-	char *rev = "HEAD";
-	if (gitfs_rev)
-		rev = gitfs_rev;
-	debug("using rev %s\n", rev);
-
-	if (git_revparse_single(&obj, d->repo, rev) < 0) {
-		error("Failed to resolve rev: %s\n", rev);
+	if (git_tree_lookup(&d->tree, d->repo, &gitfs_tree_oid) < 0) {
+		git_oid_fmt(sha, &gitfs_tree_oid);
+		sha[40] = '\0';
+		error("Failed to lookup tree: %s\n", sha);
 		goto err;
 	}
-
-	switch (git_object_type(obj)) {
-		case GIT_OBJ_COMMIT:
-			git_oid_fmt(sha, git_commit_id((git_commit*)obj));
-			sha[40] = '\0';
-			debug("using commit %s\n", sha);
-
-			/* rev points to a commit, lookup corresponding
-			 * tree */
-			if (git_commit_tree(&d->tree, (git_commit*)obj) < 0) {
-				error("Failed to lookup tree for rev: %s\n", rev);
-				goto err;
-			}
-			git_object_free(obj);
-			break;
-		case GIT_OBJ_TREE:
-			/* rev points to a tree, just use it */
-			d->tree = (git_tree*)obj;
-			break;
-		default:
-			error("rev does not point to a tree or commit: %s\n", rev);
-			goto err;
-	}
-
-	git_oid_fmt(sha, git_tree_id(d->tree));
-	sha[40] = '\0';
-	debug("using tree %s\n", sha);
-
-
-
 
 	/* This return value can be accessed through
 	 * fuse_get_context()->private_data */
 	return (void*)d;
 
 err:
-	if (obj) git_object_free(obj);
 	gitfs_destroy((void*)d);
 
 	/* Tell fuse to exit the mainloop (doesn't exit immediately) */
@@ -469,6 +432,7 @@ int main(int argc, char *argv[])
 {
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	struct stat st;
+	char sha[41];
 
 	if (fuse_opt_parse(&args, NULL, gitfs_opts, gitfs_opt_proc))
 		return 1;
@@ -478,6 +442,61 @@ int main(int argc, char *argv[])
 
 	if (stat(gitfs_repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
 		return error("%s: path does not exist?\n", gitfs_repo_path), 1;
+
+	/* We open the repo now and resolve the arguments given, so we
+	 * can bail out and provide an error message when anything is
+	 * wrong. We'll have to re-open the repository later in
+	 * gitfs_init after the chroot, since the chroot will break the
+	 * repository object (but once we are there, we might have
+	 * already detached from the terminal, so it's too late to
+	 * provide useful error messages). */
+	debug("opening repo before fuse_main\n");
+	git_repository *repo;
+	if (git_repository_open(&repo, gitfs_repo_path) < 0)
+		return error("Cannot open git repository: %s\n", giterr_last()->message), 1;
+
+	/* Default to HEAD */
+	char *rev = "HEAD";
+	if (gitfs_rev)
+		rev = gitfs_rev;
+	debug("using rev %s\n", rev);
+
+	git_object *obj;
+	if (git_revparse_single(&obj, repo, rev) < 0)
+		return error("Failed to resolve rev: %s\n", rev), 1;
+
+	git_tree *tree;
+	switch (git_object_type(obj)) {
+		case GIT_OBJ_COMMIT:
+			git_oid_fmt(sha, git_commit_id((git_commit*)obj));
+			sha[40] = '\0';
+			debug("using commit %s\n", sha);
+
+			/* rev points to a commit, lookup corresponding
+			 * tree */
+			if (git_commit_tree(&tree, (git_commit*)obj) < 0) {
+				return error("Failed to lookup tree for rev: %s\n", rev), 1;
+			}
+			git_object_free(obj);
+			break;
+		case GIT_OBJ_TREE:
+			/* rev points to a tree, just use it */
+			tree = (git_tree*)obj;
+			break;
+		default:
+			return error("rev does not point to a tree or commit: %s\n", rev), 1;
+	}
+
+	git_oid_fmt(sha, git_tree_id(tree));
+	sha[40] = '\0';
+	debug("using tree %s\n", sha);
+
+	/* Save the oid we found, for gitfs_init to open after chrooting */
+	git_oid_cpy(&gitfs_tree_oid, git_tree_id(tree));
+
+	/* Unallocate this stuff, since it's useless after chrooting */
+	git_tree_free(tree);
+	git_repository_free(repo);
 
 	/* Force the mount to be read-only */
 	fuse_opt_insert_arg(&args, 1, "-oro");
