@@ -506,6 +506,16 @@ int main(int argc, char *argv[])
 	/* Force the mount to be read-only */
 	fuse_opt_add_opt(&opts, "ro");
 
+	/* Set a meaningful fsname (e.g., to let mount show
+	 * "foo.git mounted on /somewhere"). */
+	char fsname_opt[PATH_MAX + 8];
+	snprintf(fsname_opt, lengthof(fsname_opt), "fsname=%s", gitfs_repo_path);
+	fuse_opt_add_opt_escaped(&opts, fsname_opt);
+
+	/* Make the filsystem type "fuse.git-fs" (this is the default if
+	 * fsname is not specified). */
+	fuse_opt_add_opt(&opts, "subtype=git-fs");
+
 	/* Force fuse to use single-threaded mode, since libgit2 is not
 	 * yet thread-safe. */
 	fuse_opt_insert_arg(&args, 1, "-s");
