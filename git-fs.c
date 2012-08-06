@@ -19,6 +19,9 @@
 	#include <linux/limits.h>
 #endif
 
+/* Macro to get the length of a static array */
+#define lengthof(arr) (sizeof(arr) / sizeof(*arr))
+
 char *gitfs_repo_path = NULL;
 char *gitfs_rev = NULL;
 git_oid gitfs_tree_oid;
@@ -498,12 +501,21 @@ int main(int argc, char *argv[])
 	git_tree_free(tree);
 	git_repository_free(repo);
 
+	char *opts = NULL; /* fuse_opt_add_opt will allocate this */
+
 	/* Force the mount to be read-only */
-	fuse_opt_insert_arg(&args, 1, "-oro");
+	fuse_opt_add_opt(&opts, "ro");
 
 	/* Force fuse to use single-threaded mode, since libgit2 is not
 	 * yet thread-safe. */
 	fuse_opt_insert_arg(&args, 1, "-s");
+
+	/* Append the options collected in opts */
+	fuse_opt_insert_arg(&args, 1, "-o");
+	fuse_opt_insert_arg(&args, 2, opts);
+
+	free(opts);
+	opts = NULL;
 
 	/* Allow git_init to change our exit code */
 	retval = 0;
