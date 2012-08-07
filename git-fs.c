@@ -173,6 +173,13 @@ int gitfs_getattr(const char *path, struct stat *stbuf)
 		debug( "Path is a file: '%s'\n", path);
 		stbuf->st_nlink = 1;
 		stbuf->st_mode = git_tree_entry_attributes(e->tree_entry);
+		/* Override the permissions for links, since git just
+		 * stores the link type bit. */
+		if (S_ISLNK(stbuf->st_mode))
+			stbuf->st_mode = S_IFLNK | S_IRWXU | S_IRWXG | S_IRWXO;
+		/* Note that this gives the length of the filename for
+		 * symlinks, but that's what native filesystems do as
+		 * well. */
 		stbuf->st_size = git_blob_rawsize(e->object.blob);
 	} else {
 		error("Unsupported type?!\n");
