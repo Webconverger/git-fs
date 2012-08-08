@@ -540,6 +540,25 @@ int main(int argc, char *argv[])
 	 * fsname is not specified). */
 	fuse_opt_add_opt(&opts, "subtype=git-fs");
 
+	/* Since we are a read-only filesystem and our contents cannot
+	 * be externally modified (note that even if the git repository
+	 * changes, the specific tree object we've locked onto can never
+	 * change!), enable some aggresive caching to greatly improve
+	 * performance. */
+
+	/* This enables the usual kernel caching methods for file
+	 * contents. The kernel normally takes care of updating any
+	 * cache entries when they are written to (so this only works
+	 * when the filesystem is only written to through fuse). */
+	fuse_opt_add_opt(&opts, "kernel_cache");
+
+	/* These enable more aggresive caching of file existence and
+	 * attributes (the default is 1 second, but since our contents
+	 * never change, we raise this to 600 seconds). */
+	fuse_opt_add_opt(&opts, "entry_timeout=600");
+	fuse_opt_add_opt(&opts, "negative_timeout=600");
+	fuse_opt_add_opt(&opts, "attr_timeout=600");
+
 	/* Force fuse to use single-threaded mode, since libgit2 is not
 	 * yet thread-safe. */
 	fuse_opt_insert_arg(&args, 1, "-s");
