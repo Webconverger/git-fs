@@ -25,6 +25,7 @@
 char *gitfs_repo_path = NULL;
 char *gitfs_rev = NULL;
 git_oid gitfs_tree_oid;
+time_t gitfs_commit_time;
 int enable_debug = 0;
 int retval;
 
@@ -163,6 +164,15 @@ int gitfs_getattr(const char *path, struct stat *stbuf)
 		goto out;
 
 	memset(stbuf, 0, sizeof(struct stat));
+
+	/* Set all times to the only time we (might) have available: The
+	 * time the commit we're working with was made. Note that we
+	 * _could_ search back through history to find the real times,
+	 * of files, but this is time-consuming and probably not worth
+	 * the trouble (right now). */
+	stbuf->st_atime = gitfs_commit_time;
+	stbuf->st_ctime = gitfs_commit_time;
+	stbuf->st_mtime = gitfs_commit_time;
 
 	if (e->type == GIT_OBJ_TREE) {
 		debug( "Path is a directory: '%s'\n", path);
@@ -487,11 +497,18 @@ int main(int argc, char *argv[])
 			if (git_commit_tree(&tree, (git_commit*)obj) < 0) {
 				return error("Failed to lookup tree for rev: %s\n", rev), 1;
 			}
+			gitfs_commit_time = git_commit_time((git_commit*)obj);
 			git_object_free(obj);
 			break;
 		case GIT_OBJ_TREE:
 			/* rev points to a tree, just use it */
 			tree = (git_tree*)obj;
+
+			/* Trees don't store any time information, so
+			 * just use the current time (better than using
+			 * 0, which can confuse programs such as tar).
+			 * */
+			gitfs_commit_time = time(NULL);
 			break;
 		default:
 			return error("rev does not point to a tree or commit: %s\n", rev), 1;
