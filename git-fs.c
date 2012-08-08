@@ -559,6 +559,13 @@ int main(int argc, char *argv[])
 	fuse_opt_add_opt(&opts, "negative_timeout=600");
 	fuse_opt_add_opt(&opts, "attr_timeout=600");
 
+	/* Tell the kernel to go ahead and check permissions based on
+	 * the mode we return in getattr (by default, we're supposed to
+	 * check permissions in open, getattr, etc. but we don't want
+	 * that). There's probably not much permissions to check, but
+	 * let's set this anyway. */
+	fuse_opt_add_opt(&opts, "default_permissions");
+
 	/* Force fuse to use single-threaded mode, since libgit2 is not
 	 * yet thread-safe. */
 	fuse_opt_insert_arg(&args, 1, "-s");
