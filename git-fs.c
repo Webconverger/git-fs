@@ -107,30 +107,36 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 
 	/* Fill e->type */
 	e->type = git_tree_entry_type(e->tree_entry);
+	switch(e->type) {
+		case GIT_OBJ_TREE:
+			/* Lookup the corresponding git_tree object and
+			 * store it into e->object */
+			if (git_tree_entry_to_object((git_object**)&e->object.tree, d->repo, e->tree_entry) < 0) {
+				error("Tree not found?!: '%s'\n", path);
+				retval = -EIO;
+				goto out;
+			}
+			break;
 
-	/* Fill e->object */
-	if (e->type == GIT_OBJ_TREE) {
-		/* Lookup the corresponding git_tree object */
-		if (git_tree_entry_to_object((git_object**)&e->object.tree, d->repo, e->tree_entry) < 0) {
-			error("Tree not found?!: '%s'\n", path);
-			retval = -EIO;
+		case GIT_OBJ_BLOB:
+			/* Lookup the corresponding git_blob object and
+			 * store it into e->object */
+			if (git_tree_entry_to_object((git_object**)&e->object.blob, d->repo, e->tree_entry) < 0) {
+				error("Blob not found?!: '%s'\n", path);
+				retval = -EIO;
+				goto out;
+			}
+			break;
+
+		case GIT_OBJ_COMMIT:
+			debug("Ignoring submodule entry: '%s'\n", path);
+			retval = -ENOENT;
 			goto out;
-		}
-	} else if (e->type == GIT_OBJ_BLOB) {
-		/* Lookup the corresponding git_blob object */
-		if (git_tree_entry_to_object((git_object**)&e->object.blob, d->repo, e->tree_entry) < 0) {
-			error("Blob not found?!: '%s'\n", path);
-			retval = -EIO;
+
+		default:
+			debug("Ignoring unknown entry: '%s'\n", path);
+			retval = -ENOENT;
 			goto out;
-		}
-	} else if (e->type == GIT_OBJ_COMMIT) {
-		debug("Ignoring submodule entry: '%s'\n", path);
-		retval = -ENOENT;
-		goto out;
-	} else {
-		debug("Ignoring unknown entry: '%s'\n", path);
-		retval = -ENOENT;
-		goto out;
 	}
 out:
 	if (retval < 0 && e) {
