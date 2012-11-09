@@ -310,7 +310,7 @@ void gitfs_destroy(void *private_data) {
 }
 
 void* gitfs_init(void) {
-	char sha[41];
+	char sha[GIT_OID_HEXSZ + 1];
 	/* Start by chrooting into the git repository. Doing this allows
 	 * git-fs to be started from within initrd and not break if
 	 * mount points are shuffled around, causing the location of the
@@ -343,7 +343,7 @@ void* gitfs_init(void) {
 
 	if (git_tree_lookup(&d->tree, d->repo, &gitfs_tree_oid) < 0) {
 		git_oid_fmt(sha, &gitfs_tree_oid);
-		sha[40] = '\0';
+		sha[GIT_OID_HEXSZ] = '\0';
 		error("Failed to lookup tree: %s\n", sha);
 		goto err;
 	}
@@ -502,7 +502,7 @@ int main(int argc, char *argv[])
 	switch (git_object_type(obj)) {
 		case GIT_OBJ_COMMIT:
 			git_oid_fmt(sha, git_commit_id((git_commit*)obj));
-			sha[40] = '\0';
+			sha[GIT_OID_HEXSZ] = '\0';
 			debug("using commit %s\n", sha);
 
 			/* rev points to a commit, lookup corresponding
@@ -528,7 +528,7 @@ int main(int argc, char *argv[])
 	}
 
 	git_oid_fmt(sha, git_tree_id(tree));
-	sha[40] = '\0';
+	sha[GIT_OID_HEXSZ] = '\0';
 	debug("using tree %s\n", sha);
 
 	/* Save the oid we found, for gitfs_init to open after chrooting */
