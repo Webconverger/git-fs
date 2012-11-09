@@ -41,6 +41,11 @@ struct gitfs_data {
  * requiring multiple casts to silence the compiler warnings). */
 #define GITFS_FH(fi) ((gitfs_entry *)(intptr_t)fi->fh)
 
+typedef enum {
+	GITFS_FILE,
+	GITFS_DIR,
+} gitfs_entry_type;
+
 void debug(const char* format, ...) {
 	va_list args;
 	if (!enable_debug)
@@ -53,9 +58,10 @@ void debug(const char* format, ...) {
 typedef struct gitfs_entry {
 	/* The tree_entry for this entry, or NULL for the root directory */
 	git_tree_entry *tree_entry;
-	/** The type, GIT_OBJ_TREE or GIT_OBJ_BLOB */
-	git_otype type;
-	/* The tree or blob corresponding to this entry */
+	/** The type */
+	gitfs_entry_type type;
+	/* The tree or blob corresponding to this
+	 * entry */
 	union {
 		git_tree *tree;
 		git_blob *blob;
@@ -63,11 +69,11 @@ typedef struct gitfs_entry {
 } gitfs_entry;
 
 void gitfs_entry_free(gitfs_entry *e) {
-	if (e->type == GIT_OBJ_TREE && e->tree_entry != NULL)
+	if (e->type == GITFS_DIR && e->tree_entry != NULL)
 		/* Don't free the tree when tree_entry is NULL, since
 		 * that's the root tree */
 		git_tree_free(e->object.tree);
-	else if (e->type == GIT_OBJ_BLOB)
+	else if (e->type == GITFS_FILE)
 		git_blob_free(e->object.blob);
 
 	if (e->tree_entry)
@@ -94,7 +100,7 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 		 * the root path since the root path is not an entry in
 		 * any other tree). */
 		e->tree_entry = NULL;
-		e->type = GIT_OBJ_TREE;
+		e->type = GITFS_DIR;
 		e->object.tree = d->tree;
 		return 0;
 	}
@@ -106,8 +112,7 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 	}
 
 	/* Fill e->type */
-	e->type = git_tree_entry_type(e->tree_entry);
-	switch(e->type) {
+	switch(git_tree_entry_type(e->tree_entry)) {
 		case GIT_OBJ_TREE:
 			/* Lookup the corresponding git_tree object and
 			 * store it into e->object */
@@ -116,6 +121,7 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 				retval = -EIO;
 				goto out;
 			}
+			e->type = GITFS_DIR;
 			break;
 
 		case GIT_OBJ_BLOB:
@@ -126,6 +132,7 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 				retval = -EIO;
 				goto out;
 			}
+			e->type = GITFS_FILE;
 			break;
 
 		case GIT_OBJ_COMMIT:
@@ -180,12 +187,12 @@ int gitfs_getattr(const char *path, struct stat *stbuf)
 	stbuf->st_ctime = gitfs_commit_time;
 	stbuf->st_mtime = gitfs_commit_time;
 
-	if (e->type == GIT_OBJ_TREE) {
+	if (e->type == GITFS_DIR) {
 		debug( "Path is a directory: '%s'\n", path);
 		stbuf->st_nlink = 2;
 		stbuf->st_mode = 040755;
 		stbuf->st_size = 4096;
-	} else if (e->type == GIT_OBJ_BLOB) {
+	} else if (e->type == GITFS_FILE) {
 		debug( "Path is a file: '%s'\n", path);
 		stbuf->st_nlink = 1;
 		stbuf->st_mode = git_tree_entry_attributes(e->tree_entry);
@@ -218,7 +225,7 @@ int gitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 {
 	debug("readdir called for '%s'\n", path);
 	gitfs_entry *e = GITFS_FH(fi);
-	if (e->type != GIT_OBJ_TREE)
+	if (e->type != GITFS_DIR)
 		return debug("Path is not a directory?!: '%s'\n", path), -EIO;
 
 	int entry_count = git_tree_entrycount(e->object.tree);
@@ -244,7 +251,7 @@ int gitfs_read(const char *path, char *buf, size_t size, off_t offset,
 {
 	debug("read called for '%s'\n", path);
 	gitfs_entry *e = GITFS_FH(fi);
-	if (e->type != GIT_OBJ_BLOB || !S_ISREG(git_tree_entry_attributes(e->tree_entry)))
+	if (e->type != GITFS_FILE || !S_ISREG(git_tree_entry_attributes(e->tree_entry)))
 		return error("Path is not a file?!: '%s'\n", path), -EIO;
 
 	int blob_size = git_blob_rawsize(e->object.blob);
@@ -270,7 +277,7 @@ int gitfs_readlink(const char *path, char *buf, size_t size) {
 	if ((retval = gitfs_lookup_entry(&e, path)) < 0)
 		goto out;
 
-	if (e->type != GIT_OBJ_BLOB || !S_ISLNK(git_tree_entry_attributes(e->tree_entry))) {
+	if (e->type != GITFS_FILE || !S_ISLNK(git_tree_entry_attributes(e->tree_entry))) {
 		debug("Path is not a link?!: '%s'\n", path);
 		retval = -EIO;
 		goto out;
