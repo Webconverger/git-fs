@@ -249,7 +249,7 @@ int gitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 int gitfs_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
-	debug("read called for '%s'\n", path);
+	debug("read called for '%s' (offset %d, size %d)\n", path, offset, size);
 	gitfs_entry *e = GITFS_FH(fi);
 	if (e->type != GITFS_FILE || !S_ISREG(git_tree_entry_attributes(e->tree_entry)))
 		return error("Path is not a file?!: '%s'\n", path), -EIO;
