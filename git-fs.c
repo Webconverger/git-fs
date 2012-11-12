@@ -631,18 +631,20 @@ int main(int argc, char *argv[])
 		return error("Failed to resolve rev: %s\n", rev), 1;
 
 	git_tree *tree;
+	git_commit *commit;
 	switch (git_object_type(obj)) {
 		case GIT_OBJ_COMMIT:
-			git_oid_fmt(sha, git_commit_id((git_commit*)obj));
+			commit = (git_commit*)obj;
+			git_oid_fmt(sha, git_commit_id(commit));
 			sha[GIT_OID_HEXSZ] = '\0';
 			debug("using commit %s\n", sha);
 
 			/* rev points to a commit, lookup corresponding
 			 * tree */
-			if (git_commit_tree(&tree, (git_commit*)obj) < 0) {
+			if (git_commit_tree(&tree, commit) < 0) {
 				return error("Failed to lookup tree for rev: %s\n", rev), 1;
 			}
-			d->commit_time = git_commit_time((git_commit*)obj);
+			d->commit_time = git_commit_time(commit);
 			git_object_free(obj);
 			break;
 		case GIT_OBJ_TREE:
