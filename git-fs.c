@@ -62,6 +62,7 @@ struct gitfs_data {
 	/* Options passed on the cmdline */
 	const char *repo_path;
 	const char *rev;
+	bool no_oid_files;
 
 	/* Mounted commit / tree */
 	time_t commit_time;
@@ -217,6 +218,10 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
  */
 int gitfs_init_oid_entry(struct gitfs_data *d, const char *path, const git_oid* oid)
 {
+	/* Disabled, skip */
+	if (d->no_oid_files)
+		return 0;
+
 	/* Check if the statically allocated oid_entries array is long
 	 * enough. This is a sanity check, this can only occur when the
 	 * code is (incorrectly) modified. */
@@ -526,6 +531,11 @@ void usage(struct fuse_args *args, FILE *out) {
 	     "        a commit or tree object (e.g. a branch name, tag\n"
 	     "        name, symbolic ref, sha). When not specified,\n"
 	     "        HEAD is used.\n"
+	     "    -o no-oid-files\n"
+	     "        Don't export magic files /.git-fs-tree-id and\n"
+	     "        (when applicable) /.git-fs-commit-id containing\n"
+	     "        the hashes of the mounted tree and commit\n"
+	     "        respectively.\n"
 	     "\n"
 	     , args->argv[0]);
              fuse_opt_add_arg(args, "-ho");
@@ -537,6 +547,7 @@ enum {
 	KEY_HELP,
 	KEY_REV,
 	KEY_RWRO,
+	KEY_NO_OID_FILES,
 };
 
 static struct fuse_opt gitfs_opts[] = {
@@ -548,6 +559,7 @@ static struct fuse_opt gitfs_opts[] = {
 	FUSE_OPT_KEY("rev=%s",         KEY_REV),
 	FUSE_OPT_KEY("rw",             KEY_RWRO),
 	FUSE_OPT_KEY("ro",             KEY_RWRO),
+	FUSE_OPT_KEY("no-oid-files",   KEY_NO_OID_FILES),
 	FUSE_OPT_END
 };
 
@@ -583,6 +595,10 @@ static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
 	} else if (key == KEY_HELP) {
 		usage(outargs, stdout);
 		exit(0);
+	} else if (key == KEY_NO_OID_FILES) {
+		d->no_oid_files = 1;
+		/* Don't pass this option onto fuse_main */
+		return 0;
 	}
 
 	/* Pass all other options to fuse_main */
