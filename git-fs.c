@@ -43,15 +43,6 @@ typedef enum {
 	GITFS_OID,
 } gitfs_entry_type;
 
-void debug(const char* format, ...) {
-	va_list args;
-	if (!enable_debug)
-		return;
-	va_start(args,format);
-	vfprintf(stderr, format, args);
-	va_end(args);
-}
-
 typedef struct gitfs_entry {
 	/* The tree_entry for this entry, or NULL for the root
 	 * GITFS_DIR or all GITFS_OID type entries. */
@@ -84,6 +75,16 @@ struct gitfs_data {
 	/* The number of valid entries in oid_entries */
 	size_t oid_entry_count;
 };
+
+void debug(const char* format, ...) {
+	if (!enable_debug)
+		return;
+	va_list args;
+	va_start(args,format);
+	vfprintf(stderr, format, args);
+	va_end(args);
+}
+
 
 void gitfs_entry_free(gitfs_entry *e) {
 	if (e->type == GITFS_DIR && e->tree_entry != NULL)
