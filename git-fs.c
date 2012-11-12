@@ -645,6 +645,10 @@ int main(int argc, char *argv[])
 				return error("Failed to lookup tree for rev: %s\n", rev), 1;
 			}
 			d->commit_time = git_commit_time(commit);
+
+			/* Export the commit id through a magic file */
+			if (gitfs_init_oid_entry(d, "/.git-fs-commit-id", git_commit_id(commit)) < 0)
+				return 1;
 			git_object_free(obj);
 			break;
 		case GIT_OBJ_TREE:
@@ -671,6 +675,11 @@ int main(int argc, char *argv[])
 
 	/* Save the oid we found, for gitfs_init to open after chrooting */
 	git_oid_cpy(&d->tree_oid, git_tree_id(tree));
+
+	/* Export the tree id through a magic file */
+	if (gitfs_init_oid_entry(d, "/.git-fs-tree-id", &d->tree_oid) < 0)
+		return 1;
+
 
 	/* Unallocate this stuff, since it's useless after chrooting */
 	git_tree_free(tree);
