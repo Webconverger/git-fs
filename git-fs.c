@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include <git2.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 /* http://pubs.opengroup.org/onlinepubs/009695399/basedefs/limits.h.html
  */
@@ -22,7 +23,7 @@
 /* Macro to get the length of a static array */
 #define lengthof(arr) (sizeof(arr) / sizeof(*arr))
 
-int enable_debug = 0;
+bool enable_debug = 0;
 
 #define error(...) fprintf(stderr, __VA_ARGS__)
 
