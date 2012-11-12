@@ -649,6 +649,10 @@ int main(int argc, char *argv[])
 			/* rev points to a tree, just use it */
 			tree = (git_tree*)obj;
 
+			git_oid_fmt(sha, git_tree_id(tree));
+			sha[GIT_OID_HEXSZ] = '\0';
+			debug("using commit %s\n", sha);
+
 			/* Trees don't store any time information, so
 			 * just use the current time (better than using
 			 * 0, which can confuse programs such as tar).
