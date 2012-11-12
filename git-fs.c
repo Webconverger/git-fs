@@ -40,11 +40,10 @@ typedef enum {
 } gitfs_entry_type;
 
 typedef struct gitfs_entry {
-	/* The tree_entry for this entry, or NULL for the root
-	 * GITFS_DIR or all GITFS_OID type entries. */
-	git_tree_entry *tree_entry;
 	/** The type */
 	gitfs_entry_type type;
+	/* The tree_entry for this entry, when type is GITFS_FILE. */
+	git_tree_entry *tree_entry;
 	/* The tree, blob or oid (in string form) corresponding to this
 	 * entry */
 	union {
@@ -96,21 +95,22 @@ void debug(const char* format, ...) {
 
 
 void gitfs_entry_free(gitfs_entry *e) {
-	if (e->type == GITFS_DIR && e->tree_entry != NULL)
-		/* Don't free the tree when tree_entry is NULL, since
-		 * that's the root tree */
-		git_tree_free(e->object.tree);
-	else if (e->type == GITFS_FILE)
-		git_blob_free(e->object.blob);
-	else if (e->type == GITFS_OID) {
-		/* Don't free GITFS_OID entries, they're statically
-		 * allocated in gitfs_data. The contents stored in them
-		 * will be explicitely freed by gitfs_destroy. */
-		return;
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
+	switch (e->type) {
+		case GITFS_DIR:
+			if (e->object.tree != d->tree)
+				git_tree_free(e->object.tree);
+			break;
+		case GITFS_FILE:
+			git_tree_entry_free(e->tree_entry);
+			git_blob_free(e->object.blob);
+			break;
+		case GITFS_OID:
+			/* Don't free GITFS_OID entries, they're statically
+			 * allocated in gitfs_data. The contents stored in them
+			 * will be explicitely freed by gitfs_destroy. */
+			return;
 	}
-
-	if (e->tree_entry)
-		git_tree_entry_free(e->tree_entry);
 
 	free(e);
 }
@@ -144,23 +144,24 @@ int gitfs_lookup_git_entry(gitfs_entry **out, const char *path) {
 		 * this special case (there exists no git_tree_entry for
 		 * the root path since the root path is not an entry in
 		 * any other tree). */
-		e->tree_entry = NULL;
 		e->type = GITFS_DIR;
 		e->object.tree = d->tree;
 		return 0;
 	}
+
+	git_tree_entry *tree_entry = NULL;
 	/* Fill e->tree_entry */
-	if (git_tree_entry_bypath(&e->tree_entry, d->tree, path + 1) < 0) {
+	if (git_tree_entry_bypath(&tree_entry, d->tree, path + 1) < 0) {
 		retval = -ENOENT;
 		goto out;
 	}
 
 	/* Fill e->type */
-	switch(git_tree_entry_type(e->tree_entry)) {
+	switch(git_tree_entry_type(tree_entry)) {
 		case GIT_OBJ_TREE:
 			/* Lookup the corresponding git_tree object and
 			 * store it into e->object */
-			if (git_tree_entry_to_object((git_object**)&e->object.tree, d->repo, e->tree_entry) < 0) {
+			if (git_tree_entry_to_object((git_object**)&e->object.tree, d->repo, tree_entry) < 0) {
 				error("Tree not found?!: '%s'\n", path);
 				retval = -EIO;
 				goto out;
@@ -171,12 +172,14 @@ int gitfs_lookup_git_entry(gitfs_entry **out, const char *path) {
 		case GIT_OBJ_BLOB:
 			/* Lookup the corresponding git_blob object and
 			 * store it into e->object */
-			if (git_tree_entry_to_object((git_object**)&e->object.blob, d->repo, e->tree_entry) < 0) {
+			if (git_tree_entry_to_object((git_object**)&e->object.blob, d->repo, tree_entry) < 0) {
 				error("Blob not found?!: '%s'\n", path);
 				retval = -EIO;
 				goto out;
 			}
 			e->type = GITFS_FILE;
+			e->tree_entry = tree_entry;
+			tree_entry = NULL;
 			break;
 
 		case GIT_OBJ_COMMIT:
@@ -194,6 +197,8 @@ out:
 		gitfs_entry_free(e);
 		*out = 0;
 	}
+	git_tree_entry_free(tree_entry);
+
 	return retval;
 }
 
@@ -235,7 +240,6 @@ int gitfs_init_oid_entry(struct gitfs_data *d, const char *path, const git_oid* 
 	gitfs_entry *e = &d->oid_entries[d->oid_entry_count];
 	e->tree_entry = NULL;
 	e->type = GITFS_OID;
-
 
 	e->object.oid = malloc(GIT_OID_HEXSZ + 1);
 	if (!e->object.oid)
