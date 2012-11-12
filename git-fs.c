@@ -2,7 +2,7 @@
  * fuse + libgit2 = read-only mounting of bare repos
  */
 
-#define FUSE_USE_VERSION 25
+#define FUSE_USE_VERSION 26
 #define _FILE_OFFSET_BITS 64
 #include <fuse.h>
 #include <stdio.h>
@@ -430,7 +430,7 @@ void gitfs_destroy(void *private_data) {
 	}
 }
 
-void* gitfs_init(void) {
+void* gitfs_init(struct fuse_conn_info *conn) {
 	char sha[GIT_OID_HEXSZ + 1];
 	/* Start by chrooting into the git repository. Doing this allows
 	 * git-fs to be started from within initrd and not break if
@@ -524,7 +524,7 @@ void usage(struct fuse_args *args, FILE *out) {
 	     "\n"
 	     , args->argv[0]);
              fuse_opt_add_arg(args, "-ho");
-             fuse_main(args->argc, args->argv, &gitfs_oper);
+             fuse_main(args->argc, args->argv, &gitfs_oper, NULL);
 }
 
 enum {
@@ -713,7 +713,7 @@ int main(int argc, char *argv[])
 
 	/* Allow git_init to change our exit code */
 	retval = 0;
-	fuse_main(args.argc, args.argv, &gitfs_oper);
+	fuse_main(args.argc, args.argv, &gitfs_oper, NULL);
 	return retval;
 }
 
