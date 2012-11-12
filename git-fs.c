@@ -29,11 +29,6 @@ time_t gitfs_commit_time;
 int enable_debug = 0;
 int retval;
 
-struct gitfs_data {
-	git_repository *repo;
-	git_tree *tree;
-};
-
 #define error(...) fprintf(stderr, __VA_ARGS__)
 
 /* Macro to hide the ugly casts needed to access fi->fh (which is a
@@ -67,6 +62,11 @@ typedef struct gitfs_entry {
 		git_blob *blob;
 	} object;
 } gitfs_entry;
+
+struct gitfs_data {
+	git_repository *repo;
+	git_tree *tree;
+};
 
 void gitfs_entry_free(gitfs_entry *e) {
 	if (e->type == GITFS_DIR && e->tree_entry != NULL)
