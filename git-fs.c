@@ -39,6 +39,8 @@ int retval;
 typedef enum {
 	GITFS_FILE,
 	GITFS_DIR,
+	/* A special (virtual) file that contains an object id (hash). */
+	GITFS_OID,
 } gitfs_entry_type;
 
 void debug(const char* format, ...) {
@@ -51,21 +53,36 @@ void debug(const char* format, ...) {
 }
 
 typedef struct gitfs_entry {
-	/* The tree_entry for this entry, or NULL for the root directory */
+	/* The tree_entry for this entry, or NULL for the root
+	 * GITFS_DIR or all GITFS_OID type entries. */
 	git_tree_entry *tree_entry;
 	/** The type */
 	gitfs_entry_type type;
-	/* The tree or blob corresponding to this
+	/* The tree, blob or oid (in string form) corresponding to this
 	 * entry */
 	union {
 		git_tree *tree;
 		git_blob *blob;
+		/* Content of the file (hash in ascii form).
+		 * Must be exactly GIT_OID_HEXSZ + 1 characters
+		 * long, contain a trailing newline but no
+		 * nul-termination. */
+		char *oid;
 	} object;
 } gitfs_entry;
 
 struct gitfs_data {
 	git_repository *repo;
 	git_tree *tree;
+
+	/* Allocate for up to two oid files (but there might be less */
+	gitfs_entry oid_entries[2];
+	/* Paths corresponding to each entry in oid_entries. Should each
+	 * be a leading slash followed by a plain filename (no
+	 * subdirectories allowed) */
+	const char *oid_paths[2];
+	/* The number of valid entries in oid_entries */
+	size_t oid_entry_count;
 };
 
 void gitfs_entry_free(gitfs_entry *e) {
@@ -75,6 +92,12 @@ void gitfs_entry_free(gitfs_entry *e) {
 		git_tree_free(e->object.tree);
 	else if (e->type == GITFS_FILE)
 		git_blob_free(e->object.blob);
+	else if (e->type == GITFS_OID) {
+		/* Don't free GITFS_OID entries, they're statically
+		 * allocated in gitfs_data. The contents stored in them
+		 * will be explicitely freed by gitfs_destroy. */
+		return;
+	}
 
 	if (e->tree_entry)
 		git_tree_entry_free(e->tree_entry);
@@ -82,7 +105,19 @@ void gitfs_entry_free(gitfs_entry *e) {
 	free(e);
 }
 
-int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
+int gitfs_lookup_oid_entry(gitfs_entry **out, const char *path) {
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
+	int i;
+	for (i = 0; i < d->oid_entry_count; i++) {
+		if (!strcmp(path, d->oid_paths[i])) {
+			*out = &d->oid_entries[i];
+			return 0;
+		}
+	}
+	return -ENOENT;
+}
+
+int gitfs_lookup_git_entry(gitfs_entry **out, const char *path) {
 	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
 	int retval = 0;
 
@@ -106,7 +141,6 @@ int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
 	}
 	/* Fill e->tree_entry */
 	if (git_tree_entry_bypath(&e->tree_entry, d->tree, path + 1) < 0) {
-		debug("File not found: '%s'\n", path);
 		retval = -ENOENT;
 		goto out;
 	}
@@ -151,6 +185,53 @@ out:
 		*out = 0;
 	}
 	return retval;
+}
+
+int gitfs_lookup_entry(gitfs_entry **out, const char *path) {
+	int retval = gitfs_lookup_git_entry(out, path);
+
+	/* Path not found in git, see if it's one of the magic oid paths */
+	if (retval == -ENOENT)
+		retval = gitfs_lookup_oid_entry(out, path);
+
+	if (retval == -ENOENT)
+		debug("File not found: '%s'\n", path);
+
+	return retval;
+}
+
+/**
+ * Initialize an oid entry, which is a magic file inside / that contains
+ * an oid. Path must be the pathname, including leading /. The pointer
+ * in path must not be freed until gitfs_destroy, since it is used as is
+ * (e.g., a string constant is perfect).
+ */
+int gitfs_init_oid_entry(struct gitfs_data *d, const char *path, const git_oid* oid)
+{
+	/* Check if the statically allocated oid_entries array is long
+	 * enough. This is a sanity check, this can only occur when the
+	 * code is (incorrectly) modified. */
+	if (d->oid_entry_count == lengthof(d->oid_entries))
+		return error("oid_entries is nog long enough?!\n"), -ENOMEM;
+
+	/* Copy the path (pointer) */
+	d->oid_paths[d->oid_entry_count] = path;
+
+	/* Fill the entry */
+	gitfs_entry *e = &d->oid_entries[d->oid_entry_count];
+	e->tree_entry = NULL;
+	e->type = GITFS_OID;
+
+
+	e->object.oid = malloc(GIT_OID_HEXSZ + 1);
+	if (!e->object.oid)
+		return error("Could not allocate memory for oid file contents (%s)\n", path), -ENOMEM;
+	git_oid_fmt(e->object.oid, oid);
+	e->object.oid[GIT_OID_HEXSZ] = '\n';
+
+	d->oid_entry_count++;
+
+	return 0;
 }
 
 int gitfs_open(const char *path, struct fuse_file_info *fi)
@@ -204,6 +285,12 @@ int gitfs_getattr(const char *path, struct stat *stbuf)
 		 * symlinks, but that's what native filesystems do as
 		 * well. */
 		stbuf->st_size = git_blob_rawsize(e->object.blob);
+	} else if (e->type == GITFS_OID) {
+		debug( "Path is a special oid file: '%s'\n", path);
+		stbuf->st_nlink = 1;
+		/* Read-only for everyone */
+		stbuf->st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
+		stbuf->st_size = GIT_OID_HEXSZ + 1;
 	} else {
 		error("Unsupported type?!\n");
 		retval = -EIO;
@@ -223,13 +310,14 @@ out:
 int gitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		off_t offset, struct fuse_file_info *fi)
 {
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
 	debug("readdir called for '%s'\n", path);
 	gitfs_entry *e = GITFS_FH(fi);
 	if (e->type != GITFS_DIR)
 		return debug("Path is not a directory?!: '%s'\n", path), -EIO;
 
 	int entry_count = git_tree_entrycount(e->object.tree);
-	while (offset < entry_count) {
+	while (offset < (entry_count)) {
 		const git_tree_entry *entry = git_tree_entry_byindex(e->object.tree, offset);
 		/* Add the entry to the list. The offset passed is the
 		 * offset to the _next_ entry. If filler returns 1, buf
@@ -243,6 +331,20 @@ int gitfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		offset++;
 	}
 
+	if (path[0] == '/' && path[1] == '\0') {
+		/* Dirlisting of root dir /, insert all magic oid paths
+		 * first. */
+		while (offset - entry_count < d->oid_entry_count) {
+			/* Note that we skip the first char of
+			 * object.oid.path, which is a leading / for
+			 * easy comparison in gitfs_lookup_oid_entry. */
+			if (filler(buf, d->oid_paths[offset - entry_count] + 1, NULL, offset + 1) == 1)
+				return 0;
+			offset++;
+		}
+	}
+
+
 	return 0;
 }
 
@@ -250,11 +352,25 @@ int gitfs_read(const char *path, char *buf, size_t size, off_t offset,
 		struct fuse_file_info *fi)
 {
 	debug("read called for '%s' (offset %d, size %d)\n", path, offset, size);
-	gitfs_entry *e = GITFS_FH(fi);
-	if (e->type != GITFS_FILE || !S_ISREG(git_tree_entry_attributes(e->tree_entry)))
-		return error("Path is not a file?!: '%s'\n", path), -EIO;
+	size_t blob_size;
+	const void *blob;
 
-	int blob_size = git_blob_rawsize(e->object.blob);
+	gitfs_entry *e = GITFS_FH(fi);
+	debug("type %d\n", e->type);
+	switch (e->type) {
+		case GITFS_FILE:
+			if (!S_ISREG(git_tree_entry_attributes(e->tree_entry)))
+				return error("Path is not a regular file?!: '%s'\n", path), -EIO;
+			blob_size = git_blob_rawsize(e->object.blob);
+			blob = git_blob_rawcontent(e->object.blob);
+			break;
+		case GITFS_OID:
+			blob_size = GIT_OID_HEXSZ + 1;
+			blob = e->object.oid;
+			break;
+		default:
+			return error("Path is not a file?!: '%s'\n", path), -EIO;
+	}
 
 	if (offset >= blob_size)
 		size = 0;
@@ -262,7 +378,7 @@ int gitfs_read(const char *path, char *buf, size_t size, off_t offset,
 		size = blob_size - offset;
 
 	if (size)
-		memcpy(buf, git_blob_rawcontent(e->object.blob) + offset, size);
+		memcpy(buf, blob + offset, size);
 
 	debug( "read copied %d bytes\n", (int)size);
 	return size;
@@ -301,10 +417,15 @@ out:
 
 void gitfs_destroy(void *private_data) {
 	struct gitfs_data *d = (struct gitfs_data *)private_data;
+	int i;
 
 	if (d) {
 		if (d->tree) git_tree_free(d->tree);
 		if (d->repo) git_repository_free(d->repo);
+		for (i = 0; i < d->oid_entry_count; i++) {
+			free(d->oid_entries[i].object.oid);
+		}
+
 		free(d);
 	}
 }
