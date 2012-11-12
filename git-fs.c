@@ -257,7 +257,7 @@ int gitfs_open(const char *path, struct fuse_file_info *fi)
 
 int gitfs_release(const char *path, struct fuse_file_info *fi)
 {
-	/* Free the tree_entry pointer in fh */
+	/* Free the gitfs_entry pointer in fh */
 	if(fi->fh)
 		gitfs_entry_free(GITFS_FH(fi));
 	return 0;
