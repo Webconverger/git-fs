@@ -439,6 +439,7 @@ void* gitfs_init(struct fuse_conn_info *conn) {
 	 * anything can happen, except for unmounting it completely.
 	 * Note that we can't do this chroot in main(), since fuse_main
 	 * needs /dev/fuse and possibly /dev/null and others too... */
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
 	debug("chrooting to %s\n", gitfs_repo_path);
 
 	if (chroot(gitfs_repo_path) < 0) {
@@ -447,12 +448,6 @@ void* gitfs_init(struct fuse_conn_info *conn) {
 	}
 	if (chdir("/") < 0) {
 		error("Failed to chdir to /: %s\n", strerror(errno));
-		goto err;
-	}
-
-	struct gitfs_data *d = calloc(1, sizeof(struct gitfs_data));
-	if (!d) {
-		error("Failed to allocate memory for userdata\n");
 		goto err;
 	}
 
@@ -588,6 +583,11 @@ int main(int argc, char *argv[])
 	struct stat st;
 	char sha[41];
 
+	struct gitfs_data *d = calloc(1, sizeof(struct gitfs_data));
+	if (!d) {
+		return error("Failed to allocate memory for userdata\n"), 1;
+	}
+
 	if (fuse_opt_parse(&args, NULL, gitfs_opts, gitfs_opt_proc))
 		return 1;
 
@@ -713,7 +713,9 @@ int main(int argc, char *argv[])
 
 	/* Allow git_init to change our exit code */
 	retval = 0;
-	fuse_main(args.argc, args.argv, &gitfs_oper, NULL);
+	/* Pass d as user_data, which will be made available through the
+	 * context in gitfs_init. */
+	fuse_main(args.argc, args.argv, &gitfs_oper, d);
 	return retval;
 }
 
