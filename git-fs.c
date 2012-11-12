@@ -22,12 +22,7 @@
 /* Macro to get the length of a static array */
 #define lengthof(arr) (sizeof(arr) / sizeof(*arr))
 
-char *gitfs_repo_path = NULL;
-char *gitfs_rev = NULL;
-git_oid gitfs_tree_oid;
-time_t gitfs_commit_time;
 int enable_debug = 0;
-int retval;
 
 #define error(...) fprintf(stderr, __VA_ARGS__)
 
@@ -63,6 +58,14 @@ typedef struct gitfs_entry {
 } gitfs_entry;
 
 struct gitfs_data {
+	/* Options passed on the cmdline */
+	const char *repo_path;
+	const char *rev;
+
+	/* Mounted commit / tree */
+	time_t commit_time;
+	git_oid tree_oid;
+
 	git_repository *repo;
 	git_tree *tree;
 
@@ -74,6 +77,10 @@ struct gitfs_data {
 	const char *oid_paths[2];
 	/* The number of valid entries in oid_entries */
 	size_t oid_entry_count;
+
+	/* Value to return when fuse_main exits */
+	int retval;
+
 };
 
 void debug(const char* format, ...) {
@@ -252,6 +259,7 @@ int gitfs_release(const char *path, struct fuse_file_info *fi)
 
 int gitfs_getattr(const char *path, struct stat *stbuf)
 {
+	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
 	int retval = 0;
 	debug("Getattr called for '%s'\n", path);
 	gitfs_entry *e = NULL;
@@ -265,9 +273,9 @@ int gitfs_getattr(const char *path, struct stat *stbuf)
 	 * _could_ search back through history to find the real times,
 	 * of files, but this is time-consuming and probably not worth
 	 * the trouble (right now). */
-	stbuf->st_atime = gitfs_commit_time;
-	stbuf->st_ctime = gitfs_commit_time;
-	stbuf->st_mtime = gitfs_commit_time;
+	stbuf->st_atime = d->commit_time;
+	stbuf->st_ctime = d->commit_time;
+	stbuf->st_mtime = d->commit_time;
 
 	if (e->type == GITFS_DIR) {
 		debug( "Path is a directory: '%s'\n", path);
@@ -441,10 +449,10 @@ void* gitfs_init(struct fuse_conn_info *conn) {
 	 * Note that we can't do this chroot in main(), since fuse_main
 	 * needs /dev/fuse and possibly /dev/null and others too... */
 	struct gitfs_data *d = (struct gitfs_data *)(fuse_get_context()->private_data);
-	debug("chrooting to %s\n", gitfs_repo_path);
+	debug("chrooting to %s\n", d->repo_path);
 
-	if (chroot(gitfs_repo_path) < 0) {
-		error("Failed to chroot to %s: %s\n", gitfs_repo_path, strerror(errno));
+	if (chroot(d->repo_path) < 0) {
+		error("Failed to chroot to %s: %s\n", d->repo_path, strerror(errno));
 		goto err;
 	}
 	if (chdir("/") < 0) {
@@ -458,8 +466,8 @@ void* gitfs_init(struct fuse_conn_info *conn) {
 		goto err;
 	}
 
-	if (git_tree_lookup(&d->tree, d->repo, &gitfs_tree_oid) < 0) {
-		git_oid_fmt(sha, &gitfs_tree_oid);
+	if (git_tree_lookup(&d->tree, d->repo, &d->tree_oid) < 0) {
+		git_oid_fmt(sha, &d->tree_oid);
 		sha[GIT_OID_HEXSZ] = '\0';
 		error("Failed to lookup tree: %s\n", sha);
 		goto err;
@@ -477,7 +485,7 @@ err:
 
 	/* Store a return value, so we don't return success when the
 	 * mounting failed */
-	retval = 1;
+	d->retval = 1;
 	return NULL;
 }
 
@@ -544,10 +552,12 @@ static struct fuse_opt gitfs_opts[] = {
 
 static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 {
+	struct gitfs_data *d = (struct gitfs_data *)data;
+
 	/* The first non-option argument is the repo path */
-	if (key == FUSE_OPT_KEY_NONOPT && gitfs_repo_path == NULL) {
-		gitfs_repo_path = realpath(arg, NULL);
-		if (gitfs_repo_path == NULL) {
+	if (key == FUSE_OPT_KEY_NONOPT && d->repo_path == NULL) {
+		d->repo_path = realpath(arg, NULL);
+		if (d->repo_path == NULL) {
 			error("%s: Failed to resolve path: %s\n", arg, strerror(errno));
 			return -1;
 		}
@@ -562,11 +572,11 @@ static int gitfs_opt_proc(void *data, const char *arg, int key, struct fuse_args
 		/* Don't pass this option onto fuse_main */
 		return 0;
 	} else if (key == KEY_REV) {
-		if (gitfs_rev != NULL) {
+		if (d->rev != NULL) {
 			error("--rev / -o rev can be passed only once\n");
 			return -1;
 		}
-		gitfs_rev = strdup(strchr(arg, '=') + 1);
+		d->rev = strdup(strchr(arg, '=') + 1);
 		/* Don't pass this option onto fuse_main */
 		return 0;
 	} else if (key == KEY_HELP) {
@@ -589,14 +599,14 @@ int main(int argc, char *argv[])
 		return error("Failed to allocate memory for userdata\n"), 1;
 	}
 
-	if (fuse_opt_parse(&args, NULL, gitfs_opts, gitfs_opt_proc))
+	if (fuse_opt_parse(&args, d, gitfs_opts, gitfs_opt_proc))
 		return 1;
 
-	if (gitfs_repo_path == NULL)
+	if (d->repo_path == NULL)
 		return error("No repository path given\n\n"), usage(&args, stderr), 1;
 
-	if (stat(gitfs_repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
-		return error("%s: path does not exist?\n", gitfs_repo_path), 1;
+	if (stat(d->repo_path, &st) < 0 || !S_ISDIR(st.st_mode))
+		return error("%s: path does not exist?\n", d->repo_path), 1;
 
 	/* We open the repo now and resolve the arguments given, so we
 	 * can bail out and provide an error message when anything is
@@ -607,13 +617,13 @@ int main(int argc, char *argv[])
 	 * provide useful error messages). */
 	debug("opening repo before fuse_main\n");
 	git_repository *repo;
-	if (git_repository_open(&repo, gitfs_repo_path) < 0)
+	if (git_repository_open(&repo, d->repo_path) < 0)
 		return error("Cannot open git repository: %s\n", giterr_last()->message), 1;
 
 	/* Default to HEAD */
-	char *rev = "HEAD";
-	if (gitfs_rev)
-		rev = gitfs_rev;
+	const char *rev = "HEAD";
+	if (d->rev)
+		rev = d->rev;
 	debug("using rev %s\n", rev);
 
 	git_object *obj;
@@ -632,7 +642,7 @@ int main(int argc, char *argv[])
 			if (git_commit_tree(&tree, (git_commit*)obj) < 0) {
 				return error("Failed to lookup tree for rev: %s\n", rev), 1;
 			}
-			gitfs_commit_time = git_commit_time((git_commit*)obj);
+			d->commit_time = git_commit_time((git_commit*)obj);
 			git_object_free(obj);
 			break;
 		case GIT_OBJ_TREE:
@@ -643,7 +653,7 @@ int main(int argc, char *argv[])
 			 * just use the current time (better than using
 			 * 0, which can confuse programs such as tar).
 			 * */
-			gitfs_commit_time = time(NULL);
+			d->commit_time = time(NULL);
 			break;
 		default:
 			return error("rev does not point to a tree or commit: %s\n", rev), 1;
@@ -654,7 +664,7 @@ int main(int argc, char *argv[])
 	debug("using tree %s\n", sha);
 
 	/* Save the oid we found, for gitfs_init to open after chrooting */
-	git_oid_cpy(&gitfs_tree_oid, git_tree_id(tree));
+	git_oid_cpy(&d->tree_oid, git_tree_id(tree));
 
 	/* Unallocate this stuff, since it's useless after chrooting */
 	git_tree_free(tree);
@@ -668,7 +678,7 @@ int main(int argc, char *argv[])
 	/* Set a meaningful fsname (e.g., to let mount show
 	 * "foo.git mounted on /somewhere"). */
 	char fsname_opt[PATH_MAX + 8];
-	snprintf(fsname_opt, lengthof(fsname_opt), "fsname=%s", gitfs_repo_path);
+	snprintf(fsname_opt, lengthof(fsname_opt), "fsname=%s", d->repo_path);
 	fuse_opt_add_opt_escaped(&opts, fsname_opt);
 
 	/* Make the filsystem type "fuse.git-fs" (this is the default if
@@ -712,11 +722,11 @@ int main(int argc, char *argv[])
 	free(opts);
 	opts = NULL;
 
-	/* Allow git_init to change our exit code */
-	retval = 0;
 	/* Pass d as user_data, which will be made available through the
 	 * context in gitfs_init. */
 	fuse_main(args.argc, args.argv, &gitfs_oper, d);
-	return retval;
+
+	/* Allow git_init to change our exit code */
+	return d->retval;
 }
 
