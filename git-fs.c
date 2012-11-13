@@ -295,7 +295,7 @@ int gitfs_getattr(const char *path, struct stat *stbuf)
 	} else if (e->type == GITFS_FILE) {
 		debug( "Path is a file: '%s'\n", path);
 		stbuf->st_nlink = 1;
-		stbuf->st_mode = git_tree_entry_attributes(e->tree_entry);
+		stbuf->st_mode = git_tree_entry_filemode(e->tree_entry);
 		/* Override the permissions for links, since git just
 		 * stores the link type bit. */
 		if (S_ISLNK(stbuf->st_mode))
@@ -378,7 +378,7 @@ int gitfs_read(const char *path, char *buf, size_t size, off_t offset,
 	debug("type %d\n", e->type);
 	switch (e->type) {
 		case GITFS_FILE:
-			if (!S_ISREG(git_tree_entry_attributes(e->tree_entry)))
+			if (!S_ISREG(git_tree_entry_filemode(e->tree_entry)))
 				return error("Path is not a regular file?!: '%s'\n", path), -EIO;
 			blob_size = git_blob_rawsize(e->object.blob);
 			blob = git_blob_rawcontent(e->object.blob);
@@ -412,7 +412,7 @@ int gitfs_readlink(const char *path, char *buf, size_t size) {
 	if ((retval = gitfs_lookup_entry(&e, path)) < 0)
 		goto out;
 
-	if (e->type != GITFS_FILE || !S_ISLNK(git_tree_entry_attributes(e->tree_entry))) {
+	if (e->type != GITFS_FILE || !S_ISLNK(git_tree_entry_filemode(e->tree_entry))) {
 		debug("Path is not a link?!: '%s'\n", path);
 		retval = -EIO;
 		goto out;
