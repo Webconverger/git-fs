@@ -615,6 +615,9 @@ int main(int argc, char *argv[])
 	struct stat st;
 	char sha[41];
 
+	/* Initalize thread storage in libgit2 */
+	git_threads_init();
+
 	struct gitfs_data *d = calloc(1, sizeof(struct gitfs_data));
 	if (!d) {
 		return error("Failed to allocate memory for userdata\n"), 1;
@@ -747,10 +750,6 @@ int main(int argc, char *argv[])
 	 * let's set this anyway. */
 	fuse_opt_add_opt(&opts, "default_permissions");
 
-	/* Force fuse to use single-threaded mode, since libgit2 is not
-	 * yet thread-safe. */
-	fuse_opt_insert_arg(&args, 1, "-s");
-
 	/* Append the options collected in opts */
 	fuse_opt_insert_arg(&args, 1, "-o");
 	fuse_opt_insert_arg(&args, 2, opts);
@@ -761,6 +760,9 @@ int main(int argc, char *argv[])
 	/* Pass d as user_data, which will be made available through the
 	 * context in gitfs_init. */
 	fuse_main(args.argc, args.argv, &gitfs_oper, d);
+
+	/* Clean up thread storage in libgit2 */
+	git_threads_shutdown();
 
 	/* Allow git_init to change our exit code */
 	return d->retval;
