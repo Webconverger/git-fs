@@ -59,8 +59,8 @@ typedef struct gitfs_entry {
 
 struct gitfs_data {
 	/* Options passed on the cmdline */
-	const char *repo_path;
-	const char *rev;
+	char *repo_path;
+	char *rev;
 	bool no_oid_files;
 
 	/* Mounted commit / tree */
@@ -444,8 +444,6 @@ void gitfs_destroy(void *private_data) {
 		for (i = 0; i < d->oid_entry_count; i++) {
 			free(d->oid_entries[i].object.oid);
 		}
-
-		free(d);
 	}
 }
 
@@ -760,6 +758,12 @@ int main(int argc, char *argv[])
 	/* Pass d as user_data, which will be made available through the
 	 * context in gitfs_init. */
 	fuse_main(args.argc, args.argv, &gitfs_oper, d);
+
+	fuse_opt_free_args(&args);
+
+	free(d->repo_path);
+	free(d->rev);
+	free(d);
 
 	/* Clean up thread storage in libgit2 */
 	git_threads_shutdown();
