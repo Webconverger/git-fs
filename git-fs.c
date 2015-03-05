@@ -613,9 +613,6 @@ int main(int argc, char *argv[])
 	struct stat st;
 	char sha[41];
 
-	/* Initalize thread storage in libgit2 */
-	git_threads_init();
-
 	struct gitfs_data *d = calloc(1, sizeof(struct gitfs_data));
 	if (!d) {
 		return error("Failed to allocate memory for userdata\n"), 1;
@@ -764,9 +761,6 @@ int main(int argc, char *argv[])
 	free(d->repo_path);
 	free(d->rev);
 	free(d);
-
-	/* Clean up thread storage in libgit2 */
-	git_threads_shutdown();
 
 	/* Allow git_init to change our exit code */
 	return d->retval;
