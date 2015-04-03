@@ -13,6 +13,8 @@
 #include <git2.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <signal.h>
+#include <execinfo.h>
 
 /* http://pubs.opengroup.org/onlinepubs/009695399/basedefs/limits.h.html
  */
@@ -26,6 +28,20 @@
 bool enable_debug = 0;
 
 #define error(...) fprintf(stderr, __VA_ARGS__)
+
+// Dump a stacktrace to stderr
+static void dump_trace(int signum) {
+	error("Segmentation fault\n");
+	void * buffer[255];
+	const int calls = backtrace(buffer, lengthof(buffer));
+	if (calls == 0) {
+		error("Failed to get a backtrace");
+	} else {
+		// print trace to stderr
+		backtrace_symbols_fd(buffer, calls, 2);
+	}
+	exit(1);
+}
 
 /* Macro to hide the ugly casts needed to access fi->fh (which is a
  * uint64_t, which can store pointers, but is too big on 32-bit systems,
@@ -612,6 +628,16 @@ int main(int argc, char *argv[])
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	struct stat st;
 	char sha[41];
+
+	// Do a dummy backtrace call. This loads some files (ld.so.cache) and
+	// ldopens libgcc_s.so, which are not available anymore later due to
+	// the chroot (and might not be ideal to do in a signal handler anyway).
+	void *dummy[1];
+	backtrace(dummy, 1);
+
+	// Dump a stack trace on a segfault
+	signal(SIGSEGV, dump_trace);
+	signal(SIGABRT, dump_trace);
 
 	struct gitfs_data *d = calloc(1, sizeof(struct gitfs_data));
 	if (!d) {
