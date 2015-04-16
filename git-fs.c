@@ -26,8 +26,9 @@
 #define lengthof(arr) (sizeof(arr) / sizeof(*arr))
 
 bool enable_debug = 0;
+int error_fd = 2;
 
-#define error(...) fprintf(stderr, __VA_ARGS__)
+#define error(...) dprintf(error_fd, __VA_ARGS__)
 
 // Dump a stacktrace to stderr
 static void dump_trace(int signum) {
@@ -38,7 +39,7 @@ static void dump_trace(int signum) {
 		error("Failed to get a backtrace");
 	} else {
 		// print trace to stderr
-		backtrace_symbols_fd(buffer, calls, 2);
+		backtrace_symbols_fd(buffer, calls, error_fd);
 	}
 	exit(1);
 }
@@ -777,6 +778,10 @@ int main(int argc, char *argv[])
 
 	free(opts);
 	opts = NULL;
+
+	/* fuse_main will redirect stderr to /dev/null, so keep a reference
+	 * around in case we need to print a segfault trace */
+	error_fd = dup(error_fd);
 
 	/* Pass d as user_data, which will be made available through the
 	 * context in gitfs_init. */
