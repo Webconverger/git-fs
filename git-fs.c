@@ -630,6 +630,15 @@ int main(int argc, char *argv[])
 	struct stat st;
 	char sha[41];
 
+	// When runing form initrd, mark ourselves as a storage daemon
+	// that runs from initrd for systemd. This prevents
+	// systemd-shutdown from killing use on shutdown, and instead
+	// lets the initrd code unmount use instead. This prevents
+	// issues when the rootfs is mounted using git-fs. See also
+	// https://www.freedesktop.org/wiki/Software/systemd/RootStorageDaemons/
+	if (access("/etc/initrd-release", F_OK) >= 0)
+		argv[0][0] = '@';
+
 	// Do a dummy backtrace call. This loads some files (ld.so.cache) and
 	// ldopens libgcc_s.so, which are not available anymore later due to
 	// the chroot (and might not be ideal to do in a signal handler anyway).
